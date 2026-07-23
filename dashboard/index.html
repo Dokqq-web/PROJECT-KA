@@ -74,7 +74,12 @@
             <div id="steps" class="steps"></div>
 
             <div class="form-footer">
-              <p id="form-message" role="status"></p>
+              <div>
+                <p id="form-message" role="status"></p>
+                <label class="test-file-upload">Файл для upload
+                  <input id="test-file-upload" type="file">
+                </label>
+              </div>
               <button class="primary" id="run-button" type="submit">
                 <span>Запустить тест</span>
                 <span aria-hidden="true">→</span>
@@ -102,6 +107,7 @@
           </div>
 
           <div id="result" class="result" hidden>
+            <div class="report-links" id="report-links"></div>
             <div class="result-summary">
               <div>
                 <span>Результат</span>
@@ -303,6 +309,18 @@ assertVisible | [data-testid=dashboard]
               <span id="notification-status">Уведомления: проверяем…</span>
               <button class="secondary compact" id="notification-test" type="button">Тест уведомления</button>
             </div>
+            <div class="notification-config">
+              <select id="notification-secret" data-secret-select>
+                <option value="">Секрет JSON уведомлений</option>
+              </select>
+              <button class="secondary compact" id="notification-save" type="button">Подключить секрет</button>
+            </div>
+            <form class="maintenance-form" id="maintenance-form">
+              <label>Хранить данные, дней<input id="retention-days" type="number" min="1" max="3650" value="30"></label>
+              <button class="secondary compact" name="mode" value="preview" type="submit">Предпросмотр</button>
+              <button class="danger compact" name="mode" value="cleanup" type="submit">Очистить</button>
+            </form>
+            <p class="maintenance-report" id="maintenance-report"></p>
             <form class="audit-filters" id="audit-filters">
               <label>Метод
                 <select id="audit-method">
@@ -345,12 +363,16 @@ assertVisible | [data-testid=dashboard]
         </div>
         <form class="schedule-form" id="schedule-form">
           <label>Название<input id="schedule-name" value="Регрессионная проверка"></label>
-          <label>Шаблон<select id="schedule-template" required><option value="">Выберите шаблон</option></select></label>
-          <label>Первый запуск<input id="schedule-run-at" type="datetime-local" required></label>
+          <label>Цель<select id="schedule-template" required><option value="">Выберите кейс или набор</option></select></label>
+          <label>Первый запуск<input id="schedule-run-at" type="datetime-local"></label>
           <label>Повторять каждые, минут<input id="schedule-repeat" type="number" min="1" placeholder="Не повторять"></label>
+          <label>Cron<input id="schedule-cron" placeholder="0 9 * * 1-5"></label>
+          <label>Часовой пояс<input id="schedule-timezone" value="Europe/Moscow"></label>
+          <label>При пересечении<select id="schedule-overlap"><option value="queue">Поставить в очередь</option><option value="skip">Пропустить</option></select></label>
           <button class="primary" type="submit"><span>Запланировать</span><span>→</span></button>
         </form>
         <div class="schedule-list" id="schedule-list"><p class="history-empty">Расписаний пока нет.</p></div>
+        <div class="schedule-trigger-list" id="schedule-trigger-list"></div>
       </section>
 
       <section class="history-section">
@@ -393,6 +415,15 @@ assertVisible | [data-testid=dashboard]
             <option value="mockRoute">Подменить API-ответ</option>
             <option value="clearMocks">Очистить подмены API</option>
             <option value="screenshot">Сделать скриншот</option>
+            <option value="hover">Навести курсор</option>
+            <option value="press">Нажать клавишу</option>
+            <option value="check">Установить флажок</option>
+            <option value="uncheck">Снять флажок</option>
+            <option value="assertValue">Проверить значение</option>
+            <option value="assertUrl">Проверить URL</option>
+            <option value="assertCount">Проверить количество</option>
+            <option value="assertAttribute">Проверить атрибут</option>
+            <option value="assertScreenshot">Сравнить с эталоном</option>
           </select>
         </label>
         <label>

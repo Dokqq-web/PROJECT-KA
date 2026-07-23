@@ -1,6 +1,9 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
+import { createReadStream } from "node:fs";
+import { stat } from "node:fs/promises";
+import { basename, extname, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { TestCase, TestStepAction } from "../domain/test-case.js";
 import { PlaywrightRunner } from "../runners/playwright-runner.js";
@@ -43,15 +46,31 @@ import {
   normalizeRoute
 } from "../operations/metrics-service.js";
 import { NotificationService } from "../services/notification-service.js";
+import { MaintenanceService } from "../services/maintenance-service.js";
+import { MigrationService } from "../database/migration-service.js";
+import { FileStorageService } from "../services/file-storage-service.js";
+import { ReportService } from "../services/report-service.js";
+import { SettingsService } from "../services/settings-service.js";
+import { logEvent } from "../operations/logger.js";
 
 const port = Number(process.env.API_PORT ?? 8080);
 const databasePath = process.env.DATABASE_PATH;
 const concurrency = Math.max(1, Number(process.env.RUN_CONCURRENCY ?? 2) || 2);
+const auth = new AuthService(databasePath);
+const vault = new SecretVault(databasePath);
+const settings = new SettingsService(databasePath);
 const devices = new DeviceService(new SqliteDeviceRepository(databasePath));
-const notifications = new NotificationService();
+const notifications = new NotificationService(
+  process.env,
+  fetch,
+  managedNotificationConfig
+);
+const files = new FileStorageService();
+const reports = new ReportService();
+const runRepository = new SqliteRunRepository(databasePath);
 const service = new RunService(
   new PlatformRunner(new PlaywrightRunner(), new MobileRunner(devices)),
-  new SqliteRunRepository(databasePath),
+  runRepository,
   concurrency,
   (run) => notifications.notifyRunCompleted(run)
 );
@@ -64,7 +83,8 @@ const suites = new TestSuiteService(
 const schedules = new ScheduleService(
   new SqliteScheduleRepository(databasePath),
   testCases,
-  service
+  service,
+  suites
 );
 const importer = new TestCaseImportService(testCases);
 const youTrack = new YouTrackConnector();
@@ -73,10 +93,19 @@ const kaiten = new KaitenConnector();
 const oneCData = new OneCDataConnector();
 const bitrix24Data = new Bitrix24DataConnector();
 const amoCrmData = new AmoCrmDataConnector();
-const auth = new AuthService(databasePath);
-const vault = new SecretVault(databasePath);
 const audit = new AuditService(databasePath);
+const maintenance = new MaintenanceService(
+  runRepository,
+  audit,
+  process.env.ARTIFACTS_DIRECTORY
+);
+const retentionDays = Number(process.env.RETENTION_DAYS);
+if (Number.isInteger(retentionDays) && retentionDays > 0) {
+  maintenance.start(retentionDays);
+}
 const metrics = new MetricsService();
+const migrations = new MigrationService(databasePath);
+migrations.apply();
 const resultPublisher = new ResultPublisher();
 const dashboardDirectory = fileURLToPath(new URL("../../dashboard/", import.meta.url));
 const allowedActions = new Set<TestStepAction>([
@@ -99,7 +128,16 @@ const allowedActions = new Set<TestStepAction>([
   "download",
   "mockRoute",
   "clearMocks",
-  "screenshot"
+  "screenshot",
+  "hover",
+  "press",
+  "check",
+  "uncheck",
+  "assertValue",
+  "assertUrl",
+  "assertCount",
+  "assertAttribute",
+  "assertScreenshot"
 ]);
 
 const server = createServer(async (request, response) => {
@@ -115,6 +153,13 @@ const server = createServer(async (request, response) => {
       response.statusCode,
       performance.now() - startedAt
     );
+    logEvent("info", "http.request.completed", {
+      requestId,
+      method: request.method ?? "UNKNOWN",
+      path: normalizeRoute(path),
+      statusCode: response.statusCode,
+      durationMs: Number((performance.now() - startedAt).toFixed(2))
+    });
   });
 
   if (request.method === "OPTIONS") {
@@ -310,8 +355,76 @@ const server = createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === "PUT" && url.pathname === "/notifications/config") {
+      if (principal?.role !== "admin") {
+        sendJson(response, 403, { error: "Admin role required" });
+        return;
+      }
+      const body = await readJson(request);
+      if (!isRecord(body) || typeof body.secretId !== "string") {
+        sendJson(response, 400, { error: "secretId is required" });
+        return;
+      }
+      if (body.secretId) {
+        const raw = vault.read(body.secretId, principal.id, true);
+        if (!raw) throw new Error("Секрет конфигурации не найден");
+        validateNotificationConfig(raw);
+      }
+      settings.set("notification_secret_id", body.secretId);
+      sendJson(response, 200, notifications.status());
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/maintenance") {
+      if (principal?.role !== "admin") {
+        sendJson(response, 403, { error: "Admin role required" });
+        return;
+      }
+      sendJson(response, 200, {
+        automaticCleanup: Number.isInteger(retentionDays) && retentionDays > 0,
+        retentionDays:
+          Number.isInteger(retentionDays) && retentionDays > 0
+            ? retentionDays
+            : null,
+        migrations: migrations.status()
+      });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/maintenance/cleanup") {
+      if (principal?.role !== "admin") {
+        sendJson(response, 403, { error: "Admin role required" });
+        return;
+      }
+      const body = await readJson(request);
+      if (!isRecord(body) || typeof body.retentionDays !== "number") {
+        sendJson(response, 400, { error: "retentionDays is required" });
+        return;
+      }
+      sendJson(
+        response,
+        200,
+        await maintenance.cleanup(body.retentionDays, body.dryRun === true)
+      );
+      return;
+    }
+
     if (request.method === "GET" && url.pathname === "/devices") {
       sendJson(response, 200, devices.list());
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/files") {
+      const body = await readJson(request);
+      if (
+        !isRecord(body) ||
+        typeof body.name !== "string" ||
+        typeof body.contentBase64 !== "string"
+      ) {
+        sendJson(response, 400, { error: "name and contentBase64 are required" });
+        return;
+      }
+      sendJson(response, 201, files.create(body.name, body.contentBase64));
       return;
     }
 
@@ -471,6 +584,37 @@ const server = createServer(async (request, response) => {
       return;
     }
 
+    const suiteMatch = url.pathname.match(/^\/test-suites\/([a-f0-9-]+)$/i);
+    if (request.method === "PUT" && suiteMatch) {
+      const body = await readJson(request);
+      if (
+        !isRecord(body) ||
+        typeof body.name !== "string" ||
+        !Array.isArray(body.testCaseIds) ||
+        !body.testCaseIds.every((id) => typeof id === "string")
+      ) {
+        sendJson(response, 400, { error: "name and testCaseIds are required" });
+        return;
+      }
+      const record = suites.update(
+        suiteMatch[1]!,
+        body.name,
+        body.testCaseIds
+      );
+      sendJson(
+        response,
+        record ? 200 : 404,
+        record ?? { error: "Набор тестов не найден" }
+      );
+      return;
+    }
+
+    if (request.method === "DELETE" && suiteMatch) {
+      const deleted = suites.delete(suiteMatch[1]!);
+      sendJson(response, deleted ? 200 : 404, { deleted });
+      return;
+    }
+
     const suiteRunMatch = url.pathname.match(
       /^\/test-suites\/([a-f0-9-]+)\/runs$/i
     );
@@ -498,6 +642,18 @@ const server = createServer(async (request, response) => {
         record ? 200 : 404,
         record ?? { error: "Запуск набора не найден" }
       );
+      return;
+    }
+
+    const suiteRetryMatch = url.pathname.match(
+      /^\/test-suite-runs\/([a-f0-9-]+)\/retry-failed$/i
+    );
+    if (request.method === "POST" && suiteRetryMatch) {
+      const record = suites.retryFailed(suiteRetryMatch[1]!);
+      sendJson(response, 202, {
+        ...record,
+        statusUrl: `/test-suite-runs/${record.id}`
+      });
       return;
     }
 
@@ -680,24 +836,49 @@ const server = createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === "GET" && url.pathname === "/schedule-triggers") {
+      sendJson(
+        response,
+        200,
+        schedules.triggers(url.searchParams.get("scheduleId") ?? undefined)
+      );
+      return;
+    }
+
     if (request.method === "POST" && url.pathname === "/schedules") {
       const body = await readJson(request);
       if (
         !isRecord(body) ||
-        typeof body.testCaseId !== "string" ||
-        typeof body.runAt !== "string"
+        !(
+          typeof body.targetId === "string" ||
+          typeof body.testCaseId === "string"
+        ) ||
+        !(
+          typeof body.runAt === "string" ||
+          typeof body.cronExpression === "string"
+        )
       ) {
         sendJson(response, 400, {
-          error: "testCaseId and runAt are required"
+          error: "targetId/testCaseId and runAt/cronExpression are required"
         });
         return;
       }
       const record = schedules.create({
         name: typeof body.name === "string" ? body.name : "",
-        testCaseId: body.testCaseId,
-        runAt: body.runAt,
+        testCaseId:
+          typeof body.testCaseId === "string" ? body.testCaseId : undefined,
+        targetType: body.targetType === "suite" ? "suite" : "testCase",
+        targetId:
+          typeof body.targetId === "string" ? body.targetId : undefined,
+        runAt: typeof body.runAt === "string" ? body.runAt : undefined,
         repeatMinutes:
-          typeof body.repeatMinutes === "number" ? body.repeatMinutes : undefined
+          typeof body.repeatMinutes === "number" ? body.repeatMinutes : undefined,
+        cronExpression:
+          typeof body.cronExpression === "string"
+            ? body.cronExpression
+            : undefined,
+        timezone: typeof body.timezone === "string" ? body.timezone : undefined,
+        overlapPolicy: body.overlapPolicy === "skip" ? "skip" : "queue"
       });
       sendJson(response, 201, record);
       return;
@@ -727,6 +908,52 @@ const server = createServer(async (request, response) => {
       return;
     }
 
+    const reportMatch = url.pathname.match(
+      /^\/runs\/([a-f0-9-]+)\/report\/(json|html|junit)$/i
+    );
+    if (request.method === "GET" && reportMatch) {
+      const record = service.get(reportMatch[1]!);
+      if (!record) {
+        sendJson(response, 404, { error: "Run not found" });
+        return;
+      }
+      const format = reportMatch[2]!.toLowerCase();
+      response.setHeader(
+        "content-disposition",
+        `attachment; filename="run-${record.id}.${format === "junit" ? "xml" : format}"`
+      );
+      if (format === "json") {
+        sendJson(response, 200, record);
+      } else if (format === "html") {
+        sendText(response, 200, reports.html(record), "text/html; charset=utf-8");
+      } else {
+        sendText(
+          response,
+          200,
+          reports.junit(record),
+          "application/xml; charset=utf-8"
+        );
+      }
+      return;
+    }
+
+    const artifactMatch = url.pathname.match(
+      /^\/runs\/([a-f0-9-]+)\/artifacts\/([^/]+)\/(\d+)$/i
+    );
+    if (request.method === "GET" && artifactMatch) {
+      const record = service.get(artifactMatch[1]!);
+      const step = record?.result?.steps.find(
+        (item) => item.stepId === decodeURIComponent(artifactMatch[2]!)
+      );
+      const artifact = step?.artifacts?.[Number(artifactMatch[3]!)];
+      if (!artifact) {
+        sendJson(response, 404, { error: "Artifact not found" });
+        return;
+      }
+      await sendArtifact(response, artifact);
+      return;
+    }
+
     sendJson(response, 404, { error: "Route not found" });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -747,7 +974,11 @@ for (const signal of ["SIGTERM", "SIGINT"] as const) {
     forcedExit.unref();
     server.close(() => {
       schedules.close();
+      maintenance.close();
       audit.close();
+      runRepository.close();
+      migrations.close();
+      settings.close();
       vault.close();
       auth.close();
       process.exit(0);
@@ -761,7 +992,8 @@ async function readJson(request: IncomingMessage): Promise<unknown> {
   for await (const chunk of request) {
     const buffer = Buffer.from(chunk);
     size += buffer.length;
-    if (size > 1_000_000) throw new Error("Request body is too large");
+    const limit = Number(process.env.MAX_REQUEST_BODY_BYTES ?? 8_000_000);
+    if (size > limit) throw new Error("Request body is too large");
     chunks.push(buffer);
   }
 
@@ -822,7 +1054,10 @@ function sendText(
 
 function setCorsHeaders(response: ServerResponse): void {
   response.setHeader("access-control-allow-origin", "*");
-  response.setHeader("access-control-allow-methods", "GET, POST, PUT, OPTIONS");
+  response.setHeader(
+    "access-control-allow-methods",
+    "GET, POST, PUT, DELETE, OPTIONS"
+  );
   response.setHeader(
     "access-control-allow-headers",
     "content-type, authorization, x-api-key, x-request-id"
@@ -879,6 +1114,59 @@ function secretOrValue(
   return stringValue(body[key]);
 }
 
+function managedNotificationConfig(): {
+  webhookUrl?: string;
+  telegramBotToken?: string;
+  telegramChatId?: string;
+  notifyOn?: "always" | "failure";
+} | undefined {
+  const secretId = settings.get("notification_secret_id");
+  if (!secretId) return undefined;
+  const raw = vault.read(secretId, undefined, true);
+  if (!raw) return undefined;
+  try {
+    return validateNotificationConfig(raw);
+  } catch (error) {
+    console.error("Managed notification configuration is invalid:", error);
+    return undefined;
+  }
+}
+
+function validateNotificationConfig(raw: string): {
+  webhookUrl?: string;
+  telegramBotToken?: string;
+  telegramChatId?: string;
+  notifyOn?: "always" | "failure";
+} {
+  const value: unknown = JSON.parse(raw);
+  if (!isRecord(value)) {
+    throw new Error("Секрет уведомлений должен содержать JSON-объект");
+  }
+  const configuration: {
+    webhookUrl?: string;
+    telegramBotToken?: string;
+    telegramChatId?: string;
+    notifyOn?: "always" | "failure";
+  } = {
+    webhookUrl: stringValue(value.webhookUrl),
+    telegramBotToken: stringValue(value.telegramBotToken),
+    telegramChatId: stringValue(value.telegramChatId),
+    notifyOn:
+      value.notifyOn === "failure" || value.notifyOn === "always"
+        ? value.notifyOn
+        : undefined
+  };
+  if (
+    !configuration.webhookUrl &&
+    !(configuration.telegramBotToken && configuration.telegramChatId)
+  ) {
+    throw new Error(
+      "Нужен webhookUrl либо telegramBotToken вместе с telegramChatId"
+    );
+  }
+  return configuration;
+}
+
 function sendConnectorResult(
   response: ServerResponse,
   result: {
@@ -927,4 +1215,37 @@ async function sendFile(
     "cache-control": "no-store"
   });
   response.end(body);
+}
+
+async function sendArtifact(response: ServerResponse, filePath: string): Promise<void> {
+  const root = resolve(process.env.ARTIFACTS_DIRECTORY ?? "artifacts");
+  const target = resolve(filePath);
+  if (!target.startsWith(`${root}${sep}`)) {
+    sendJson(response, 403, { error: "Artifact path is outside storage" });
+    return;
+  }
+  const info = await stat(target).catch(() => undefined);
+  if (!info) {
+    sendJson(response, 404, { error: "Artifact not found" });
+    return;
+  }
+  if (!info.isFile()) {
+    sendJson(response, 404, { error: "Artifact not found" });
+    return;
+  }
+  const types: Record<string, string> = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".json": "application/json",
+    ".txt": "text/plain; charset=utf-8",
+    ".xml": "application/xml; charset=utf-8",
+    ".html": "text/html; charset=utf-8"
+  };
+  response.writeHead(200, {
+    "content-type": types[extname(target).toLowerCase()] ?? "application/octet-stream",
+    "content-length": info.size,
+    "content-disposition": `inline; filename="${basename(target).replaceAll("\"", "")}"`
+  });
+  createReadStream(target).pipe(response);
 }

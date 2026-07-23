@@ -3,6 +3,8 @@ import {
   primitiveValues,
   type TestDataResult
 } from "./test-data-types.js";
+import { reliableFetch } from "../http/reliable-fetch.js";
+import { assertSafeExternalUrl } from "../security/url-policy.js";
 
 export interface Bitrix24DataOptions {
   mode: "demo" | "live";
@@ -33,29 +35,37 @@ export class Bitrix24DataConnector {
       `${root.pathname.replace(/\/$/, "")}/crm.item.list.json`,
       root
     );
-    const response = await fetch(endpoint, {
-      method: "POST",
-      headers: { accept: "application/json", "content-type": "application/json" },
-      body: JSON.stringify({
-        entityTypeId: options.entityTypeId ?? 3,
-        select: ["*"],
-        start: 0
-      }),
-      signal: AbortSignal.timeout(20_000)
-    });
-    if (!response.ok) {
-      throw new Error(`Битрикс24 ответил ${response.status}: ${(await response.text()).slice(0, 500)}`);
-    }
-    const body = (await response.json()) as {
-      result?: { items?: Array<Record<string, unknown>> };
-      error_description?: string;
-    };
-    if (!Array.isArray(body.result?.items)) {
-      throw new Error(body.error_description || "Битрикс24 вернул неожиданный ответ");
+    await assertSafeExternalUrl(endpoint);
+    const items: Array<Record<string, unknown>> = [];
+    let start: number | undefined = 0;
+    const limit = connectorLimit();
+    while (start !== undefined && items.length < limit) {
+      const response = await reliableFetch(endpoint, {
+        method: "POST",
+        headers: { accept: "application/json", "content-type": "application/json" },
+        body: JSON.stringify({
+          entityTypeId: options.entityTypeId ?? 3,
+          select: ["*"],
+          start
+        })
+      });
+      if (!response.ok) {
+        throw new Error(`Битрикс24 ответил ${response.status}: ${(await response.text()).slice(0, 500)}`);
+      }
+      const body = (await response.json()) as {
+        result?: { items?: Array<Record<string, unknown>> };
+        next?: number;
+        error_description?: string;
+      };
+      if (!Array.isArray(body.result?.items)) {
+        throw new Error(body.error_description || "Битрикс24 вернул неожиданный ответ");
+      }
+      items.push(...body.result.items);
+      start = typeof body.next === "number" ? body.next : undefined;
     }
     return {
       source: "bitrix24",
-      records: body.result.items.map((item, index) => ({
+      records: items.slice(0, limit).map((item, index) => ({
         id: String(item.id ?? index + 1),
         label: String(
           item.title ??
@@ -66,4 +76,9 @@ export class Bitrix24DataConnector {
       }))
     };
   }
+}
+
+function connectorLimit(): number {
+  const value = Number(process.env.MAX_CONNECTOR_ITEMS ?? 500);
+  return Number.isInteger(value) && value > 0 ? Math.min(value, 5_000) : 500;
 }

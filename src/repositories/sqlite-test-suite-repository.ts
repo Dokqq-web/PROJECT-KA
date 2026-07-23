@@ -45,6 +45,25 @@ export class SqliteTestSuiteRepository implements TestSuiteRepository {
     );
   }
 
+  updateSuite(record: TestSuiteRecord): void {
+    this.database.prepare(`
+      UPDATE test_suites
+      SET name = ?, test_case_ids_json = ?, updated_at = ?
+      WHERE id = ?
+    `).run(
+      record.name,
+      JSON.stringify(record.testCaseIds),
+      record.updatedAt,
+      record.id
+    );
+  }
+
+  deleteSuite(id: string): boolean {
+    return Number(
+      this.database.prepare("DELETE FROM test_suites WHERE id = ?").run(id).changes
+    ) > 0;
+  }
+
   getSuite(id: string): TestSuiteRecord | undefined {
     const row = this.database.prepare("SELECT * FROM test_suites WHERE id = ?")
       .get(id) as Record<string, unknown> | undefined;

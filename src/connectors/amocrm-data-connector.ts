@@ -3,6 +3,8 @@ import {
   primitiveValues,
   type TestDataResult
 } from "./test-data-types.js";
+import { reliableFetch } from "../http/reliable-fetch.js";
+import { assertSafeExternalUrl } from "../security/url-policy.js";
 
 export interface AmoCrmDataOptions {
   mode: "demo" | "live";
@@ -47,24 +49,35 @@ export class AmoCrmDataConnector {
     const endpoint = new URL("/api/v4/contacts", root);
     endpoint.searchParams.set("limit", "20");
     if (options.query?.trim()) endpoint.searchParams.set("query", options.query.trim());
-    const response = await fetch(endpoint, {
-      headers: {
-        accept: "application/hal+json",
-        authorization: `Bearer ${options.accessToken}`
-      },
-      signal: AbortSignal.timeout(20_000)
-    });
-    if (!response.ok) {
-      throw new Error(`amoCRM ответила ${response.status}: ${(await response.text()).slice(0, 500)}`);
+    await assertSafeExternalUrl(endpoint);
+    const contacts: AmoContact[] = [];
+    let next: URL | undefined = endpoint;
+    const limit = connectorLimit();
+    while (next && contacts.length < limit) {
+      await assertSafeExternalUrl(next);
+      const response = await reliableFetch(next, {
+        headers: {
+          accept: "application/hal+json",
+          authorization: `Bearer ${options.accessToken}`
+        }
+      });
+      if (!response.ok) {
+        throw new Error(`amoCRM ответила ${response.status}: ${(await response.text()).slice(0, 500)}`);
+      }
+      const body = (await response.json()) as {
+        _embedded?: { contacts?: AmoContact[] };
+        _links?: { next?: { href?: string } };
+      };
+      const page = body._embedded?.contacts;
+      if (!Array.isArray(page)) throw new Error("amoCRM вернула неожиданный ответ");
+      contacts.push(...page);
+      next = body._links?.next?.href
+        ? new URL(body._links.next.href, next)
+        : undefined;
     }
-    const body = (await response.json()) as {
-      _embedded?: { contacts?: AmoContact[] };
-    };
-    const contacts = body._embedded?.contacts;
-    if (!Array.isArray(contacts)) throw new Error("amoCRM вернула неожиданный ответ");
     return {
       source: "amocrm",
-      records: contacts.map((contact) => ({
+      records: contacts.slice(0, limit).map((contact) => ({
         id: String(contact.id),
         label: contact.name || [contact.first_name, contact.last_name].filter(Boolean).join(" ") || `Контакт ${contact.id}`,
         values: {
@@ -74,6 +87,11 @@ export class AmoCrmDataConnector {
       }))
     };
   }
+}
+
+function connectorLimit(): number {
+  const value = Number(process.env.MAX_CONNECTOR_ITEMS ?? 500);
+  return Number.isInteger(value) && value > 0 ? Math.min(value, 5_000) : 500;
 }
 
 function customFieldValues(contact: AmoContact): Record<string, string> {
@@ -87,4 +105,3 @@ function customFieldValues(contact: AmoContact): Record<string, string> {
   }
   return result;
 }
-

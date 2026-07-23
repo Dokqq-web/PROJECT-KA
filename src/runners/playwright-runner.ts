@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import {
   chromium,
@@ -14,14 +14,20 @@ import type {
   TestStep
 } from "../domain/test-case.js";
 import type { TestRunner } from "../ports/test-runner.js";
+import { FileStorageService } from "../services/file-storage-service.js";
 
 export interface PlaywrightRunnerOptions {
   artifactsDirectory?: string;
   headless?: boolean;
+  uploadsDirectory?: string;
 }
 
 export class PlaywrightRunner implements TestRunner {
-  constructor(private readonly options: PlaywrightRunnerOptions = {}) {}
+  private readonly files: FileStorageService;
+
+  constructor(private readonly options: PlaywrightRunnerOptions = {}) {
+    this.files = new FileStorageService(options.uploadsDirectory);
+  }
 
   async run(testCase: TestCase, signal?: AbortSignal): Promise<TestResult> {
     if (testCase.platform !== "web") {
@@ -35,14 +41,23 @@ export class PlaywrightRunner implements TestRunner {
       runId
     );
     await mkdir(artifactsDirectory, { recursive: true });
+    const baselineDirectory = resolve(
+      process.env.BASELINE_DIRECTORY ?? "baselines",
+      safeName(testCase.id)
+    );
 
     const browser = await chromium.launch({
       headless: this.options.headless ?? true
     });
+    const context = await browser.newContext();
+    await context.tracing.start({ screenshots: true, snapshots: true, sources: true });
     const abort = () => void browser.close().catch(() => undefined);
     signal?.addEventListener("abort", abort, { once: true });
-    const page = await browser.newPage();
+    const page = await context.newPage();
     const state: BrowserState = { page };
+    const diagnostics: BrowserDiagnostic[] = [];
+    attachDiagnostics(page, diagnostics);
+    context.on("page", (newPage) => attachDiagnostics(newPage, diagnostics));
     const variables = { ...(testCase.variables ?? {}) };
     const steps: StepResult[] = [];
     let failed = false;
@@ -68,7 +83,9 @@ export class PlaywrightRunner implements TestRunner {
             testCase,
             step,
             variables,
-            artifactsDirectory
+            artifactsDirectory,
+            this.files,
+            baselineDirectory
           );
           steps.push({
             stepId: step.id,
@@ -98,6 +115,24 @@ export class PlaywrightRunner implements TestRunner {
         }
       }
     } finally {
+      const tracePath = resolve(artifactsDirectory, "trace.zip");
+      if (failed) {
+        await context.tracing.stop({ path: tracePath }).catch(() => undefined);
+        const failedStep = steps.find((step) => step.status === "failed");
+        if (failedStep) {
+          failedStep.artifacts = [...(failedStep.artifacts ?? []), tracePath];
+        }
+      } else {
+        await context.tracing.stop().catch(() => undefined);
+      }
+      if (diagnostics.length > 0) {
+        const diagnosticPath = resolve(artifactsDirectory, "browser-diagnostics.json");
+        await writeFile(diagnosticPath, JSON.stringify(diagnostics, null, 2));
+        const targetStep = steps.find((step) => step.status === "failed") ?? steps.at(-1);
+        if (targetStep) {
+          targetStep.artifacts = [...(targetStep.artifacts ?? []), diagnosticPath];
+        }
+      }
       signal?.removeEventListener("abort", abort);
       await browser.close().catch(() => undefined);
     }
@@ -118,7 +153,9 @@ async function executeStep(
   testCase: TestCase,
   step: TestStep,
   variables: Record<string, string>,
-  artifactsDirectory: string
+  artifactsDirectory: string,
+  files: FileStorageService,
+  baselineDirectory: string
 ): Promise<string[]> {
   const page = state.page;
   const target = interpolate(step.target, variables);
@@ -215,7 +252,15 @@ async function executeStep(
       if (!step.target) throw new Error("if requires variable name in target");
       if (variables[step.target] === (value ?? "")) {
         for (const nested of step.steps ?? []) {
-          await executeStep(state, testCase, nested, variables, artifactsDirectory);
+          await executeStep(
+            state,
+            testCase,
+            nested,
+            variables,
+            artifactsDirectory,
+            files,
+            baselineDirectory
+          );
         }
       }
       return [];
@@ -228,7 +273,15 @@ async function executeStep(
       for (let index = 0; index < count; index += 1) {
         variables.repeatIndex = String(index);
         for (const nested of step.steps ?? []) {
-          await executeStep(state, testCase, nested, variables, artifactsDirectory);
+          await executeStep(
+            state,
+            testCase,
+            nested,
+            variables,
+            artifactsDirectory,
+            files,
+            baselineDirectory
+          );
         }
       }
       return [];
@@ -262,8 +315,10 @@ async function executeStep(
       return [];
     }
     case "uploadFile":
-      if (!value) throw new Error("uploadFile requires file path in value");
-      await requiredLocator(state, target).setInputFiles(resolve(value), { timeout });
+      if (!value) throw new Error("uploadFile requires file ID in value");
+      await requiredLocator(state, target).setInputFiles(files.resolve(value), {
+        timeout
+      });
       return [];
     case "download": {
       const downloadPromise = state.page.waitForEvent("download", { timeout });
@@ -303,6 +358,86 @@ async function executeStep(
       await state.page.screenshot({ path, fullPage: true });
       return [path];
     }
+    case "hover":
+      await requiredLocator(state, target).hover({ timeout });
+      return [];
+    case "press":
+      if (!value) throw new Error("press requires keyboard key in value");
+      await requiredLocator(state, target).press(value, { timeout });
+      return [];
+    case "check":
+      await requiredLocator(state, target).check({ timeout });
+      return [];
+    case "uncheck":
+      await requiredLocator(state, target).uncheck({ timeout });
+      return [];
+    case "assertValue": {
+      if (value === undefined) throw new Error("assertValue requires value");
+      const actual = await requiredLocator(state, target).inputValue({ timeout });
+      if (actual !== value) {
+        throw new Error(`Expected value "${value}", received "${actual}"`);
+      }
+      return [];
+    }
+    case "assertUrl":
+      if (!value) throw new Error("assertUrl requires expected URL in value");
+      if (!state.page.url().includes(value)) {
+        throw new Error(`Expected URL containing "${value}", received "${state.page.url()}"`);
+      }
+      return [];
+    case "assertCount": {
+      const expected = Number(value);
+      if (!Number.isInteger(expected) || expected < 0) {
+        throw new Error("assertCount requires a non-negative integer in value");
+      }
+      const actual = await requiredLocatorAll(state, target).count();
+      if (actual !== expected) {
+        throw new Error(`Expected ${expected} elements, received ${actual}`);
+      }
+      return [];
+    }
+    case "assertAttribute": {
+      if (!value?.includes("=")) {
+        throw new Error("assertAttribute value must be attribute=expected");
+      }
+      const separator = value.indexOf("=");
+      const attribute = value.slice(0, separator);
+      const expected = value.slice(separator + 1);
+      const actual = await requiredLocator(state, target).getAttribute(attribute, {
+        timeout
+      });
+      if (actual !== expected) {
+        throw new Error(
+          `Expected attribute ${attribute}="${expected}", received "${actual}"`
+        );
+      }
+      return [];
+    }
+    case "assertScreenshot": {
+      if (!value) throw new Error("assertScreenshot requires baseline name in value");
+      const baselinePath = resolve(baselineDirectory, safeArtifactName(value));
+      const actual = target
+        ? await requiredLocator(state, target).screenshot({ timeout })
+        : await state.page.screenshot({ fullPage: true });
+      await mkdir(baselineDirectory, { recursive: true });
+      const expected = await readFile(baselinePath).catch(() => undefined);
+      if (!expected && process.env.UPDATE_SNAPSHOTS === "true") {
+        await writeFile(baselinePath, actual);
+        return [];
+      }
+      if (!expected) {
+        throw new Error(`Visual baseline not found: ${baselinePath}`);
+      }
+      if (!actual.equals(expected)) {
+        const actualPath = resolve(
+          artifactsDirectory,
+          `step-${safeName(step.id)}-actual.png`
+        );
+        await writeFile(actualPath, actual);
+        throw new Error(`Visual mismatch; actual screenshot: ${actualPath}`);
+      }
+      return [];
+    }
   }
 }
 
@@ -319,6 +454,57 @@ function requiredLocator(
   return (state.frame
     ? state.frame.locator(target)
     : state.page.locator(target)).first();
+}
+
+function requiredLocatorAll(state: BrowserState, target: string | undefined): Locator {
+  if (!target) throw new Error("Step requires target");
+  return state.frame ? state.frame.locator(target) : state.page.locator(target);
+}
+
+interface BrowserDiagnostic {
+  timestamp: string;
+  type: "console" | "pageerror" | "requestfailed" | "http";
+  message: string;
+  url?: string;
+}
+
+function attachDiagnostics(page: Page, diagnostics: BrowserDiagnostic[]): void {
+  page.on("console", (message) => {
+    if (message.type() === "error") {
+      diagnostics.push({
+        timestamp: new Date().toISOString(),
+        type: "console",
+        message: message.text(),
+        url: page.url()
+      });
+    }
+  });
+  page.on("pageerror", (error) => {
+    diagnostics.push({
+      timestamp: new Date().toISOString(),
+      type: "pageerror",
+      message: error.message,
+      url: page.url()
+    });
+  });
+  page.on("requestfailed", (request) => {
+    diagnostics.push({
+      timestamp: new Date().toISOString(),
+      type: "requestfailed",
+      message: request.failure()?.errorText ?? "Request failed",
+      url: request.url()
+    });
+  });
+  page.on("response", (response) => {
+    if (response.status() >= 500) {
+      diagnostics.push({
+        timestamp: new Date().toISOString(),
+        type: "http",
+        message: `HTTP ${response.status()}`,
+        url: response.url()
+      });
+    }
+  });
 }
 
 function interpolate(

@@ -26,7 +26,16 @@ const actions = {
   download: "Скачать файл",
   mockRoute: "Подменить API-ответ",
   clearMocks: "Очистить подмены API",
-  screenshot: "Сделать скриншот"
+  screenshot: "Сделать скриншот",
+  hover: "Навести курсор",
+  press: "Нажать клавишу",
+  check: "Установить флажок",
+  uncheck: "Снять флажок",
+  assertValue: "Проверить значение",
+  assertUrl: "Проверить URL",
+  assertCount: "Проверить количество",
+  assertAttribute: "Проверить атрибут",
+  assertScreenshot: "Сравнить с эталоном"
 };
 
 const exampleSteps = [
@@ -54,6 +63,7 @@ const elements = {
   resultProgress: document.querySelector("#result-progress"),
   resultDuration: document.querySelector("#result-duration"),
   resultSteps: document.querySelector("#result-steps"),
+  reportLinks: document.querySelector("#report-links"),
   history: document.querySelector("#history-list"),
   serviceDot: document.querySelector("#service-dot"),
   serviceLabel: document.querySelector("#service-label"),
@@ -83,6 +93,8 @@ const elements = {
 };
 let activeTemplateId = null;
 let activeRunId = null;
+let availableTemplates = [];
+let availableSuites = [];
 
 function addStep(step = { action: "click", target: "", value: "" }) {
   const fragment = elements.template.content.cloneNode(true);
@@ -191,12 +203,8 @@ async function loadTemplates() {
   try {
     const response = await fetch("/test-cases");
     const records = await response.json();
-    const selectedTemplate = elements.scheduleTemplate.value;
-    elements.scheduleTemplate.replaceChildren(
-      new Option("Выберите шаблон", ""),
-      ...records.map((record) => new Option(record.testCase.name, record.id))
-    );
-    elements.scheduleTemplate.value = selectedTemplate;
+    availableTemplates = records;
+    refreshScheduleTargets();
     elements.suiteCaseList.replaceChildren(
       ...records.map((record) => {
         const label = document.createElement("label");
@@ -259,6 +267,8 @@ async function loadSuites() {
   try {
     const response = await fetch("/test-suites");
     const suites = await response.json();
+    availableSuites = suites;
+    refreshScheduleTargets();
     if (!response.ok) throw new Error(suites.error);
     if (!suites.length) {
       elements.suiteList.innerHTML = '<p class="history-empty">Наборов пока нет.</p>';
@@ -267,13 +277,50 @@ async function loadSuites() {
     elements.suiteList.replaceChildren(...suites.map((suite) => {
       const item = document.createElement("article");
       item.className = "suite-item";
-      item.innerHTML = `<div><strong>${escapeHtml(suite.name)}</strong><small>${suite.testCaseIds.length} тест-кейсов</small></div><button class="template-run" type="button">Запустить →</button>`;
-      item.querySelector("button").addEventListener("click", () => runSuite(suite.id));
+      item.innerHTML = `<div><strong>${escapeHtml(suite.name)}</strong><small>${suite.testCaseIds.length} тест-кейсов</small></div><div class="suite-actions"><button data-action="rename" type="button">Название</button><button data-action="delete" type="button">Удалить</button><button class="template-run" data-action="run" type="button">Запустить →</button></div>`;
+      item.querySelector('[data-action="run"]').addEventListener("click", () => runSuite(suite.id));
+      item.querySelector('[data-action="rename"]').addEventListener("click", () => renameSuite(suite));
+      item.querySelector('[data-action="delete"]').addEventListener("click", () => deleteSuite(suite.id));
       return item;
     }));
   } catch (error) {
     elements.suiteList.innerHTML = `<p class="history-empty">${escapeHtml(error.message)}</p>`;
   }
+}
+
+function refreshScheduleTargets() {
+  const selected = elements.scheduleTemplate.value;
+  elements.scheduleTemplate.replaceChildren(
+    new Option("Выберите кейс или набор", ""),
+    ...availableTemplates.map(
+      (record) => new Option(`Кейс · ${record.testCase.name}`, `testCase:${record.id}`)
+    ),
+    ...availableSuites.map(
+      (suite) => new Option(`Набор · ${suite.name}`, `suite:${suite.id}`)
+    )
+  );
+  elements.scheduleTemplate.value = selected;
+}
+
+async function renameSuite(suite) {
+  const name = window.prompt("Новое название набора", suite.name);
+  if (!name || name === suite.name) return;
+  const response = await fetch(`/test-suites/${suite.id}`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ name, testCaseIds: suite.testCaseIds })
+  });
+  const result = await response.json();
+  elements.message.textContent = response.ok ? "Набор обновлён" : result.error;
+  if (response.ok) await loadSuites();
+}
+
+async function deleteSuite(id) {
+  if (!window.confirm("Удалить набор? История его запусков сохранится.")) return;
+  const response = await fetch(`/test-suites/${id}`, { method: "DELETE" });
+  const result = await response.json();
+  elements.message.textContent = response.ok ? "Набор удалён" : result.error;
+  if (response.ok) await loadSuites();
 }
 
 async function runSuite(id) {
@@ -295,6 +342,16 @@ async function watchSuiteRun(id) {
     elements.message.textContent = `Набор: ${statusLabel(result.status)} · ${result.runs.length} тестов`;
     if (result.status === "passed" || result.status === "failed") {
       await loadHistory();
+      if (
+        result.status === "failed" &&
+        window.confirm("Повторить только упавшие тесты набора?")
+      ) {
+        const retry = await fetch(`/test-suite-runs/${id}/retry-failed`, {
+          method: "POST"
+        });
+        const retried = await retry.json();
+        if (retry.ok) await watchSuiteRun(retried.id);
+      }
       return;
     }
     await new Promise((resolve) => setTimeout(resolve, 1_000));
@@ -324,6 +381,66 @@ async function testNotification() {
   elements.message.textContent = response.ok
     ? `Уведомление отправлено: ${result.delivered}/${result.attempted}`
     : result.error || "Каналы уведомлений не настроены";
+}
+
+async function saveNotificationConfig() {
+  const secretId = document.querySelector("#notification-secret").value;
+  const response = await fetch("/notifications/config", {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ secretId })
+  });
+  const result = await response.json();
+  elements.message.textContent = response.ok
+    ? "Конфигурация уведомлений подключена"
+    : result.error || "Не удалось подключить конфигурацию";
+  if (response.ok) await loadNotificationStatus();
+}
+
+async function uploadTestFile(event) {
+  const file = event.target.files?.[0];
+  if (!file) return;
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  const response = await fetch("/files", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ name: file.name, contentBase64: btoa(binary) })
+  });
+  const result = await response.json();
+  elements.message.textContent = response.ok
+    ? `Файл загружен. Вставьте ID в value шага uploadFile: ${result.id}`
+    : result.error || "Не удалось загрузить файл";
+  event.target.value = "";
+}
+
+async function runMaintenance(event) {
+  event.preventDefault();
+  const mode = event.submitter?.value || "preview";
+  if (
+    mode === "cleanup" &&
+    !window.confirm("Удалить старые завершённые запуски, аудит и их артефакты?")
+  ) {
+    return;
+  }
+  const report = document.querySelector("#maintenance-report");
+  report.textContent = mode === "preview" ? "Считаем объём очистки…" : "Выполняем очистку…";
+  const response = await fetch("/maintenance/cleanup", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      retentionDays: Number(document.querySelector("#retention-days").value),
+      dryRun: mode === "preview"
+    })
+  });
+  const result = await response.json();
+  report.textContent = response.ok
+    ? `${result.dryRun ? "Будет удалено" : "Удалено"}: запусков ${result.runs}, событий аудита ${result.auditEvents}, каталогов артефактов ${result.artifactDirectories}.`
+    : result.error || "Не удалось выполнить обслуживание";
+  if (response.ok && !result.dryRun) {
+    await Promise.all([loadHistory(), loadAudit()]);
+  }
 }
 
 async function importFile(event) {
@@ -508,6 +625,8 @@ async function loadSchedules() {
         item.className = "schedule-item";
         const repeat = schedule.repeatMinutes
           ? `каждые ${schedule.repeatMinutes} мин.`
+          : schedule.cronExpression
+            ? `cron ${schedule.cronExpression} · ${schedule.timezone}`
           : "один раз";
         item.innerHTML = `
           <div><strong>${escapeHtml(schedule.name)}</strong><small>Следующий запуск: ${new Date(schedule.nextRunAt).toLocaleString("ru-RU")}</small></div>
@@ -520,19 +639,37 @@ async function loadSchedules() {
         return item;
       })
     );
+    await loadScheduleTriggers();
   } catch {
     elements.scheduleList.innerHTML = '<p class="history-empty">Расписания временно недоступны.</p>';
   }
 }
 
+async function loadScheduleTriggers() {
+  const triggers = await (await fetch("/schedule-triggers")).json();
+  const container = document.querySelector("#schedule-trigger-list");
+  container.innerHTML = triggers.length
+    ? `<h3>Последние срабатывания</h3>${triggers.slice(0, 10).map((trigger) =>
+        `<div class="trigger-item"><span>${new Date(trigger.triggeredAt).toLocaleString("ru-RU")}</span><strong class="${trigger.status}">${escapeHtml(trigger.status)}</strong><small>${escapeHtml(trigger.message || trigger.runId || "")}</small></div>`
+      ).join("")}`
+    : "";
+}
+
 async function createSchedule(event) {
   event.preventDefault();
   const repeatValue = document.querySelector("#schedule-repeat").value;
+  const cronExpression = document.querySelector("#schedule-cron").value.trim();
+  const target = elements.scheduleTemplate.value.split(":");
+  const runAtValue = document.querySelector("#schedule-run-at").value;
   const body = {
     name: document.querySelector("#schedule-name").value.trim(),
-    testCaseId: elements.scheduleTemplate.value,
-    runAt: new Date(document.querySelector("#schedule-run-at").value).toISOString(),
-    repeatMinutes: repeatValue ? Number(repeatValue) : undefined
+    targetType: target[0],
+    targetId: target.slice(1).join(":"),
+    runAt: runAtValue ? new Date(runAtValue).toISOString() : undefined,
+    repeatMinutes: repeatValue ? Number(repeatValue) : undefined,
+    cronExpression: cronExpression || undefined,
+    timezone: document.querySelector("#schedule-timezone").value.trim(),
+    overlapPolicy: document.querySelector("#schedule-overlap").value
   };
   const response = await fetch("/schedules", {
     method: "POST",
@@ -757,6 +894,13 @@ async function watchRun(id) {
 function renderResult(record) {
   elements.empty.hidden = true;
   elements.result.hidden = false;
+  elements.reportLinks.innerHTML = `
+    <button type="button" data-protected-url="/runs/${record.id}/report/html">HTML</button>
+    <button type="button" data-protected-url="/runs/${record.id}/report/junit">JUnit</button>
+    <button type="button" data-protected-url="/runs/${record.id}/report/json">JSON</button>`;
+  elements.reportLinks.querySelectorAll("[data-protected-url]").forEach((button) => {
+    button.addEventListener("click", () => openProtectedResource(button.dataset.protectedUrl));
+  });
 
   if (record.error || !record.result) {
     setBadge("failed", "Ошибка запуска");
@@ -785,10 +929,30 @@ function renderResult(record) {
         <div>
           <strong>${escapeHtml(actions[sourceStep?.action] || sourceStep?.action || `Шаг ${index + 1}`)}</strong>
           <small>${escapeHtml(step.error || sourceStep?.target || "Выполнено")}</small>
+          ${(step.artifacts || []).map((_, artifactIndex) =>
+            `<button class="artifact-link" type="button" data-protected-url="/runs/${record.id}/artifacts/${encodeURIComponent(step.stepId)}/${artifactIndex}">Артефакт ${artifactIndex + 1}</button>`
+          ).join("")}
         </div>`;
+      item.querySelectorAll("[data-protected-url]").forEach((button) => {
+        button.addEventListener("click", () =>
+          openProtectedResource(button.dataset.protectedUrl)
+        );
+      });
       return item;
     })
   );
+}
+
+async function openProtectedResource(url) {
+  const response = await fetch(url);
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    elements.message.textContent = error.error || "Не удалось получить файл";
+    return;
+  }
+  const blobUrl = URL.createObjectURL(await response.blob());
+  window.open(blobUrl, "_blank", "noopener");
+  setTimeout(() => URL.revokeObjectURL(blobUrl), 60_000);
 }
 
 async function loadHistory() {
@@ -962,6 +1126,9 @@ document.querySelector("#device-form").addEventListener("submit", createDevice);
 document.querySelector("#secret-form").addEventListener("submit", createSecret);
 document.querySelector("#suite-form").addEventListener("submit", createSuite);
 document.querySelector("#notification-test").addEventListener("click", testNotification);
+document.querySelector("#notification-save").addEventListener("click", saveNotificationConfig);
+document.querySelector("#test-file-upload").addEventListener("change", uploadTestFile);
+document.querySelector("#maintenance-form").addEventListener("submit", runMaintenance);
 document.querySelector("#audit-filters").addEventListener("submit", (event) => {
   event.preventDefault();
   loadAudit();

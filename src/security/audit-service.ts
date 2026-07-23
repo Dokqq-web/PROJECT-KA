@@ -54,6 +54,7 @@ export class AuditService {
     path: string;
     statusCode: number;
     remoteAddress?: string;
+    timestamp?: string;
   }): void {
     this.database
       .prepare(`
@@ -64,7 +65,7 @@ export class AuditService {
       `)
       .run(
         randomUUID(),
-        new Date().toISOString(),
+        input.timestamp ?? new Date().toISOString(),
         input.principal?.id ?? null,
         input.principal?.name ?? null,
         input.principal?.role ?? null,
@@ -123,5 +124,19 @@ export class AuditService {
 
   close(): void {
     this.database.close();
+  }
+
+  deleteBefore(timestamp: string): number {
+    const result = this.database
+      .prepare("DELETE FROM audit_events WHERE timestamp < ?")
+      .run(timestamp);
+    return Number(result.changes);
+  }
+
+  countBefore(timestamp: string): number {
+    const row = this.database
+      .prepare("SELECT COUNT(*) AS count FROM audit_events WHERE timestamp < ?")
+      .get(timestamp) as { count: number };
+    return Number(row.count);
   }
 }

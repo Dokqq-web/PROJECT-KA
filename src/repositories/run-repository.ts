@@ -6,5 +6,5 @@ export interface RunRepository {
   get(id: string): RunRecord | undefined;
   list(): RunRecord[];
   recoverInterruptedRuns(): number;
+  deleteCompletedBefore(timestamp: string): number;
 }
-

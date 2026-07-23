@@ -17,6 +17,8 @@ test("HTTP API enforces roles, secret ownership and audit filters", async (conte
       ...process.env,
       API_PORT: String(port),
       DATABASE_PATH: join(directory, "test.db"),
+      UPLOADS_DIRECTORY: join(directory, "uploads"),
+      ARTIFACTS_DIRECTORY: join(directory, "artifacts"),
       BOOTSTRAP_API_KEY: bootstrapKey,
       SECRET_MASTER_KEY: randomBytes(32).toString("base64")
     },
@@ -88,6 +90,20 @@ test("HTTP API enforces roles, secret ownership and audit filters", async (conte
     })
   });
   assert.equal(savedCase.status, 201);
+  const cronSchedule = await request(baseUrl, "/schedules", {
+    method: "POST",
+    headers: headers(editorOne.key),
+    body: JSON.stringify({
+      name: "Weekday schedule",
+      targetType: "testCase",
+      targetId: savedCase.body.id,
+      cronExpression: "0 9 * * 1-5",
+      timezone: "Europe/Moscow",
+      overlapPolicy: "skip"
+    })
+  });
+  assert.equal(cronSchedule.status, 201);
+  assert.equal(cronSchedule.body.scheduleType, "cron");
   const suite = await request(baseUrl, "/test-suites", {
     method: "POST",
     headers: headers(editorOne.key),
@@ -101,6 +117,26 @@ test("HTTP API enforces roles, secret ownership and audit filters", async (conte
     headers: headers(editorOne.key)
   });
   assert.equal(suites.body[0].name, "API regression");
+  const renamedSuite = await request(baseUrl, `/test-suites/${suite.body.id}`, {
+    method: "PUT",
+    headers: headers(editorOne.key),
+    body: JSON.stringify({
+      name: "API regression updated",
+      testCaseIds: [savedCase.body.id]
+    })
+  });
+  assert.equal(renamedSuite.body.name, "API regression updated");
+
+  const uploaded = await request(baseUrl, "/files", {
+    method: "POST",
+    headers: headers(editorOne.key),
+    body: JSON.stringify({
+      name: "fixture.txt",
+      contentBase64: Buffer.from("fixture").toString("base64")
+    })
+  });
+  assert.equal(uploaded.status, 201);
+  assert.match(uploaded.body.id, /^[a-f0-9-]{36}-fixture\.txt$/);
 
   const audit = await request(baseUrl, "/audit?method=POST&status=404", {
     headers: adminHeaders
@@ -119,6 +155,44 @@ test("HTTP API enforces roles, secret ownership and audit filters", async (conte
     { method: "POST", headers: adminHeaders }
   );
   assert.equal(adminRemoval.status, 200);
+
+  const maintenance = await request(baseUrl, "/maintenance/cleanup", {
+    method: "POST",
+    headers: adminHeaders,
+    body: JSON.stringify({ retentionDays: 30, dryRun: true })
+  });
+  assert.equal(maintenance.status, 200);
+  assert.equal(maintenance.body.dryRun, true);
+  const maintenanceStatus = await request(baseUrl, "/maintenance", {
+    headers: adminHeaders
+  });
+  assert.equal(maintenanceStatus.body.migrations.currentVersion, 3);
+
+  const notificationSecret = await request(baseUrl, "/secrets", {
+    method: "POST",
+    headers: adminHeaders,
+    body: JSON.stringify({
+      name: "Notification JSON",
+      value: JSON.stringify({ webhookUrl: "https://hooks.example.test/qa" })
+    })
+  });
+  const configuredNotifications = await request(
+    baseUrl,
+    "/notifications/config",
+    {
+      method: "PUT",
+      headers: adminHeaders,
+      body: JSON.stringify({ secretId: notificationSecret.body.id })
+    }
+  );
+  assert.equal(configuredNotifications.status, 200);
+  assert.equal(configuredNotifications.body.managedSecretConfigured, true);
+
+  const deletedSuite = await request(baseUrl, `/test-suites/${suite.body.id}`, {
+    method: "DELETE",
+    headers: headers(editorOne.key)
+  });
+  assert.equal(deletedSuite.body.deleted, true);
 
   const metricsResponse = await fetch(`${baseUrl}/metrics`, {
     headers: adminHeaders

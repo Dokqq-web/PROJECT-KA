@@ -3,27 +3,42 @@ import type { RunRecord } from "./run-service.js";
 export interface NotificationStatus {
   webhookConfigured: boolean;
   telegramConfigured: boolean;
+  managedSecretConfigured: boolean;
+  notifyOn: "always" | "failure";
 }
 
 type FetchLike = typeof fetch;
+export interface ManagedNotificationConfig {
+  webhookUrl?: string;
+  telegramBotToken?: string;
+  telegramChatId?: string;
+  notifyOn?: "always" | "failure";
+}
 
 export class NotificationService {
   constructor(
     private readonly environment: NodeJS.ProcessEnv = process.env,
-    private readonly fetcher: FetchLike = fetch
+    private readonly fetcher: FetchLike = fetch,
+    private readonly managedConfig: () => ManagedNotificationConfig | undefined =
+      () => undefined
   ) {}
 
   status(): NotificationStatus {
+    const managed = this.managedConfig();
+    const configuration = this.configuration();
     return {
-      webhookConfigured: Boolean(this.environment.NOTIFICATION_WEBHOOK_URL),
+      webhookConfigured: Boolean(configuration.webhookUrl),
       telegramConfigured: Boolean(
-        this.environment.TELEGRAM_BOT_TOKEN &&
-        this.environment.TELEGRAM_CHAT_ID
-      )
+        configuration.telegramBotToken &&
+        configuration.telegramChatId
+      ),
+      managedSecretConfigured: Boolean(managed),
+      notifyOn: configuration.notifyOn ?? "always"
     };
   }
 
   async notifyRunCompleted(run: RunRecord): Promise<void> {
+    if (this.configuration().notifyOn === "failure" && runPassed(run)) return;
     await this.deliver(run);
   }
 
@@ -37,12 +52,13 @@ export class NotificationService {
   ): Promise<{ attempted: number; delivered: number }> {
     const payload = runPayload(run);
     const tasks: Promise<void>[] = [];
-    const webhookUrl = this.environment.NOTIFICATION_WEBHOOK_URL;
+    const configuration = this.configuration();
+    const webhookUrl = configuration.webhookUrl;
     if (webhookUrl) {
       tasks.push(this.postJson(webhookUrl, payload));
     }
-    const token = this.environment.TELEGRAM_BOT_TOKEN;
-    const chatId = this.environment.TELEGRAM_CHAT_ID;
+    const token = configuration.telegramBotToken;
+    const chatId = configuration.telegramChatId;
     if (token && chatId) {
       tasks.push(this.postJson(
         `https://api.telegram.org/bot${token}/sendMessage`,
@@ -76,6 +92,26 @@ export class NotificationService {
       throw new Error(`HTTP ${response.status}: ${(await response.text()).slice(0, 300)}`);
     }
   }
+
+  private configuration(): ManagedNotificationConfig {
+    const managed = this.managedConfig() ?? {};
+    return {
+      webhookUrl: managed.webhookUrl ?? this.environment.NOTIFICATION_WEBHOOK_URL,
+      telegramBotToken:
+        managed.telegramBotToken ?? this.environment.TELEGRAM_BOT_TOKEN,
+      telegramChatId:
+        managed.telegramChatId ?? this.environment.TELEGRAM_CHAT_ID,
+      notifyOn:
+        managed.notifyOn ??
+        (this.environment.NOTIFICATION_NOTIFY_ON === "failure"
+          ? "failure"
+          : "always")
+    };
+  }
+}
+
+function runPassed(run: RunRecord): boolean {
+  return !run.error && run.result?.status === "passed";
 }
 
 function sampleRun(): RunRecord {

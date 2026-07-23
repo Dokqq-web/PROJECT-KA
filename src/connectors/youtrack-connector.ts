@@ -1,4 +1,6 @@
 import type { TestCase } from "../domain/test-case.js";
+import { reliableFetch } from "../http/reliable-fetch.js";
+import { assertSafeExternalUrl } from "../security/url-policy.js";
 import { parseQaBlock } from "./qa-block-parser.js";
 
 export interface YouTrackImportOptions {
@@ -57,25 +59,37 @@ async function fetchIssues(options: YouTrackImportOptions): Promise<YouTrackIssu
   }
 
   const endpoint = new URL("/api/issues", baseUrl);
+  await assertSafeExternalUrl(endpoint);
   endpoint.searchParams.set("fields", "id,idReadable,summary,description");
-  endpoint.searchParams.set("$top", String(Math.min(options.limit ?? 50, 100)));
+  const pageSize = Math.min(options.limit ?? 100, 100);
+  endpoint.searchParams.set("$top", String(pageSize));
   if (options.query?.trim()) endpoint.searchParams.set("query", options.query.trim());
 
-  const response = await fetch(endpoint, {
-    headers: {
-      accept: "application/json",
-      authorization: `Bearer ${options.token}`
-    },
-    signal: AbortSignal.timeout(15_000)
-  });
-
-  if (!response.ok) {
-    const details = (await response.text()).slice(0, 500);
-    throw new Error(`YouTrack ответил ${response.status}: ${details}`);
+  const issues: YouTrackIssue[] = [];
+  const limit = connectorLimit();
+  while (issues.length < limit) {
+    endpoint.searchParams.set("$skip", String(issues.length));
+    const response = await reliableFetch(endpoint, {
+      headers: {
+        accept: "application/json",
+        authorization: `Bearer ${options.token}`
+      }
+    });
+    if (!response.ok) {
+      const details = (await response.text()).slice(0, 500);
+      throw new Error(`YouTrack ответил ${response.status}: ${details}`);
+    }
+    const value: unknown = await response.json();
+    if (!Array.isArray(value)) throw new Error("YouTrack вернул неожиданный ответ");
+    issues.push(...(value as YouTrackIssue[]));
+    if (value.length < pageSize) break;
   }
-  const value: unknown = await response.json();
-  if (!Array.isArray(value)) throw new Error("YouTrack вернул неожиданный ответ");
-  return value as YouTrackIssue[];
+  return issues.slice(0, limit);
+}
+
+function connectorLimit(): number {
+  const value = Number(process.env.MAX_CONNECTOR_ITEMS ?? 500);
+  return Number.isInteger(value) && value > 0 ? Math.min(value, 5_000) : 500;
 }
 
 function demoIssues(): YouTrackIssue[] {

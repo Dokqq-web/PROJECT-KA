@@ -101,6 +101,17 @@ export class SqliteRunRepository implements RunRepository {
       .run(timestamp);
     return Number(result.changes);
   }
+
+  deleteCompletedBefore(timestamp: string): number {
+    const result = this.database
+      .prepare("DELETE FROM runs WHERE status = 'completed' AND updated_at < ?")
+      .run(timestamp);
+    return Number(result.changes);
+  }
+
+  close(): void {
+    this.database.close();
+  }
 }
 
 function toParameters(record: RunRecord): Array<string | number | null> {

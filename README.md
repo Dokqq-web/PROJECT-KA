@@ -11,7 +11,7 @@
 - headless-запуск веб-тестов через Playwright;
 - Android/iOS-сценарии через внешний Appium-агент;
 - очередь, ограничение параллельности, отмена и история запусков в SQLite;
-- одноразовые и повторяющиеся расписания;
+- одноразовые, интервальные и cron-расписания для кейсов и наборов;
 - сохранение, копирование и запуск шаблонов тест-кейсов;
 - регрессионные наборы из нескольких сохранённых тест-кейсов;
 - импорт тест-кейсов из JSON, CSV, Jira, YouTrack и Kaiten;
@@ -93,6 +93,13 @@ BOOTSTRAP_API_KEY=<длинный случайный ключ администр
 SECRET_MASTER_KEY=<32 случайных байта в base64>
 DATABASE_PATH=./data/qa-bot.db
 RUN_CONCURRENCY=2
+HTTP_TIMEOUT_MS=15000
+HTTP_RETRY_COUNT=2
+HTTP_RETRY_BASE_MS=250
+MAX_CONNECTOR_ITEMS=500
+OUTBOUND_HOST_ALLOWLIST=jira.example.com,youtrack.example.com
+ALLOW_PRIVATE_NETWORKS=false
+RETENTION_DAYS=30
 API_PORT=8080
 ```
 
@@ -124,6 +131,7 @@ pnpm api
 - `GET /schedules` — список расписаний.
 - `POST /schedules` — создать одноразовое или повторяющееся расписание.
 - `POST /schedules/:id/cancel` — отключить расписание.
+- `GET /schedule-triggers` — журнал созданных, пропущенных и ошибочных срабатываний.
 - `GET /test-cases` — список сохранённых шаблонов.
 - `POST /test-cases` — создать шаблон.
 - `PUT /test-cases/:id` — обновить шаблон.
@@ -132,9 +140,16 @@ pnpm api
 - `GET /test-suites` — список наборов тестов.
 - `POST /test-suites` — создать набор из массива `testCaseIds`.
 - `POST /test-suites/:id/runs` — запустить все кейсы набора через общую очередь.
+- `PUT/DELETE /test-suites/:id` — изменить или удалить набор.
 - `GET /test-suite-runs/:id` — агрегированный статус запуска набора.
+- `POST /test-suite-runs/:id/retry-failed` — повторить только упавшие кейсы.
 - `GET /notifications` — состояние каналов уведомлений для администратора.
 - `POST /notifications/test` — отправить тестовое уведомление.
+- `GET /maintenance` — текущая политика автоматической очистки.
+- `POST /maintenance/cleanup` — предпросмотр или запуск очистки старых данных.
+- `POST /files` — безопасно загрузить fixture и получить непрозрачный file ID.
+- `GET /runs/:id/artifacts/:stepId/:index` — получить артефакт с проверкой доступа.
+- `GET /runs/:id/report/html|junit|json` — скачать отчёт запуска.
 - `POST /test-cases/import` — импортировать CSV или JSON.
 - `POST /connectors/youtrack/import` — импортировать задачи YouTrack.
 - `POST /connectors/jira/import` — импортировать задачи Jira Cloud по JQL.
@@ -204,14 +219,33 @@ x-api-key: <API key>
 | `resetFrame` | Вернуться к основной странице |
 | `clickNewTab` | Нажать элемент и переключиться на открывшуюся вкладку |
 | `switchTab` | Переключиться на вкладку по индексу или значению `last` |
-| `uploadFile` | Передать путь к файлу в `value` для file input из `target` |
+| `uploadFile` | Передать file ID из `POST /files` в `value` для input из `target` |
 | `download` | Нажать элемент и сохранить загрузку в артефакты запуска |
 | `mockRoute` | Подменить URL/glob из `target` ответом из `value` |
 | `clearMocks` | Удалить сетевую подмену |
 | `screenshot` | Сохранить полноэкранный снимок как артефакт |
+| `hover` | Навести курсор на элемент |
+| `press` | Отправить клавишу или сочетание из `value` |
+| `check` / `uncheck` | Установить или снять checkbox |
+| `assertValue` | Проверить точное значение поля |
+| `assertUrl` | Проверить, что текущий URL содержит `value` |
+| `assertCount` | Проверить количество элементов |
+| `assertAttribute` | Проверить атрибут; `value` имеет вид `name=expected` |
+| `assertScreenshot` | Сравнить страницу или элемент с PNG baseline |
 
 Для `mockRoute` JSON можно передать строкой в `value`, HTTP-статус — в
 `statusCode`, дополнительные заголовки — в `headers`.
+
+`assertScreenshot` хранит эталоны в `BASELINE_DIRECTORY`. Для первоначального
+создания или осознанного обновления задайте `UPDATE_SNAPSHOTS=true`, выполните
+тест и верните значение в `false`. Сравнение выполняется побайтово, поэтому
+подходит для стабильных тестовых сред с фиксированными шрифтами и viewport.
+
+Playwright tracing включён для каждого веб-запуска. При падении в артефакты шага
+добавляется `trace.zip`, который можно открыть командой
+`pnpm exec playwright show-trace trace.zip`. Ошибки console, page error,
+неуспешные сетевые запросы и ответы `5xx` сохраняются в
+`browser-diagnostics.json`.
 
 ## Автоматические уведомления
 
@@ -227,6 +261,52 @@ TELEGRAM_CHAT_ID=-1001234567890
 Сбой внешнего канала записывается в журнал процесса, но не меняет результат
 самого теста. Настройку можно проверить кнопкой в панели или запросом
 `POST /notifications/test`.
+
+Конфигурацию также можно хранить в зашифрованном vault. Создайте секрет с JSON:
+
+```json
+{
+  "webhookUrl": "https://hooks.example.com/qa",
+  "telegramBotToken": "123456:token",
+  "telegramChatId": "-1001234567890",
+  "notifyOn": "failure"
+}
+```
+
+Затем выберите его в разделе «Безопасность и аудит». В SQLite сохраняется только
+ID секрета, а токены расшифровываются непосредственно перед отправкой.
+
+## Повторы запросов и очистка данных
+
+Операции чтения из Jira, YouTrack, Kaiten, 1С, Битрикс24 и amoCRM используют
+единый HTTP-клиент. Он повторяет запросы после сетевой ошибки, `408`, `429` и
+ответов `5xx`, учитывает `Retry-After` и применяет exponential backoff.
+Параметры задаются через `HTTP_TIMEOUT_MS`, `HTTP_RETRY_COUNT` и
+`HTTP_RETRY_BASE_MS`. Публикация комментариев автоматически не повторяется,
+чтобы не создавать дубликаты.
+
+Коннекторы загружают страницы до лимита `MAX_CONNECTOR_ITEMS`. Исходящие URL
+проверяются против SSRF: приватные сети по умолчанию запрещены. Для on-premise
+систем укажите точные домены в `OUTBOUND_HOST_ALLOWLIST` или осознанно включите
+`ALLOW_PRIVATE_NETWORKS=true`. Редиректы внешних API автоматически не
+выполняются.
+
+При заданном `RETENTION_DAYS` сервис раз в сутки удаляет завершённые старые
+запуски, связанные с ними каталоги артефактов и старые события аудита.
+Администратор может сначала выполнить безопасный dry-run через панель или:
+
+```json
+{
+  "retentionDays": 30,
+  "dryRun": true
+}
+```
+
+## Миграции базы данных
+
+При старте сервис открывает таблицу `schema_migrations` и транзакционно применяет
+все новые версии схемы. Текущая и ожидаемая версии возвращаются в
+`GET /maintenance`. Если миграция не завершилась, API не начинает слушать порт.
 
 Примеры форматов находятся в `examples/test-cases-import.csv` и
 `examples/test-cases-import.json`. Для CSV одна строка соответствует одному
@@ -256,7 +336,23 @@ Jira Cloud использует email и API token для Basic authentication. 
 
 Лимит одновременных браузерных запусков задаётся переменной окружения
 `RUN_CONCURRENCY` и по умолчанию равен `2`. Расписания сохраняются в SQLite,
-поддерживают одноразовый запуск и повтор с интервалом в минутах.
+поддерживают одноразовый запуск, повтор с интервалом и cron из пяти полей.
+Часовой пояс задаётся IANA-именем, например `Europe/Moscow`. Целью может быть
+сохранённый кейс или целый набор. При пересечении можно поставить новый запуск
+в очередь либо пропустить срабатывание; каждое решение записывается в журнал.
+
+Пример рабочего cron-расписания:
+
+```json
+{
+  "name": "Регрессия по будням",
+  "targetType": "suite",
+  "targetId": "UUID-набора",
+  "cronExpression": "0 9 * * 1-5",
+  "timezone": "Europe/Moscow",
+  "overlapPolicy": "skip"
+}
+```
 
 `POST /runs` отвечает сразу со статусом `queued`. Выполнение продолжается в фоне,
 а клиент опрашивает адрес из поля `statusUrl`.

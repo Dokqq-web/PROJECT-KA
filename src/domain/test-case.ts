@@ -20,7 +20,16 @@ export type TestStepAction =
   | "download"
   | "mockRoute"
   | "clearMocks"
-  | "screenshot";
+  | "screenshot"
+  | "hover"
+  | "press"
+  | "check"
+  | "uncheck"
+  | "assertValue"
+  | "assertUrl"
+  | "assertCount"
+  | "assertAttribute"
+  | "assertScreenshot";
 
 export interface TestStep {
   id: string;

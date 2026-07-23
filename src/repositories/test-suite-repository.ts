@@ -15,6 +15,8 @@ export interface TestSuiteRunRecord {
 
 export interface TestSuiteRepository {
   createSuite(record: TestSuiteRecord): void;
+  updateSuite(record: TestSuiteRecord): void;
+  deleteSuite(id: string): boolean;
   getSuite(id: string): TestSuiteRecord | undefined;
   listSuites(): TestSuiteRecord[];
   createRun(record: TestSuiteRunRecord): void;
