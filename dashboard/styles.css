@@ -212,6 +212,16 @@ input:focus, select:focus, textarea:focus { border-color: var(--blue); box-shado
 .audit-item span:last-child { color: var(--muted); text-align: right; }
 .audit-filters { display: grid; grid-template-columns: 1fr 1fr auto; gap: 8px; align-items: end; }
 .audit-filters button { padding: 10px 12px; }
+.suite-form { display: grid; grid-template-columns: 1fr 2fr auto; gap: 12px; align-items: end; }
+.suite-form fieldset { min-width: 0; margin: 0; padding: 8px 10px; border: 1px solid var(--line); border-radius: 9px; }
+.suite-form legend { padding: 0 5px; color: var(--muted); font-size: 9px; }
+.suite-case-list { display: flex; gap: 10px; overflow-x: auto; }
+.suite-case { display: flex; align-items: center; gap: 5px; white-space: nowrap; font-size: 10px; }
+.suite-list { margin-top: 16px; display: grid; gap: 7px; }
+.suite-item { padding: 12px 14px; display: flex; justify-content: space-between; align-items: center; border: 1px solid var(--line); border-radius: 10px; }
+.suite-item strong, .suite-item small { display: block; }
+.suite-item small { margin-top: 4px; color: var(--muted); font-size: 10px; }
+.notification-status { margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 10px; }
 .schedule-form .primary { min-width: 170px; }
 .schedule-list { margin-top: 20px; display: grid; gap: 7px; }
 .schedule-item { padding: 12px 14px; display: grid; grid-template-columns: 1fr auto auto; gap: 14px; align-items: center; border: 1px solid var(--line); border-radius: 10px; background: #fbfcfb; }
@@ -272,6 +282,7 @@ input:focus, select:focus, textarea:focus { border-color: var(--blue); box-shado
   .device-form { grid-template-columns: 1fr; }
   .device-capabilities { grid-column: auto; }
   .security-grid { grid-template-columns: 1fr; }
+  .suite-form { grid-template-columns: 1fr; }
   .schedule-form .primary { width: 100%; }
   .history-platform { display: none; }
   .history-status { grid-column: 3; grid-row: 1; }

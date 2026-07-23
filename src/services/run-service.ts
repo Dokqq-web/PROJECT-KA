@@ -25,7 +25,8 @@ export class RunService {
   constructor(
     private readonly runner: TestRunner,
     private readonly repository: RunRepository,
-    private readonly maxConcurrency = 2
+    private readonly maxConcurrency = 2,
+    private readonly onCompleted?: (record: RunRecord) => void | Promise<void>
   ) {
     this.repository.recoverInterruptedRuns();
     this.pending.push(
@@ -73,6 +74,7 @@ export class RunService {
       record.error = "Запуск отменён пользователем";
       record.updatedAt = timestamp;
       this.repository.update(record);
+      void this.notifyCompletion(record);
     } else {
       this.repository.update(record);
       this.controllers.get(id)?.abort();
@@ -127,6 +129,15 @@ export class RunService {
       record.status = "completed";
       record.updatedAt = new Date().toISOString();
       this.repository.update(record);
+      await this.notifyCompletion(record);
+    }
+  }
+
+  private async notifyCompletion(record: RunRecord): Promise<void> {
+    try {
+      await this.onCompleted?.(structuredClone(record));
+    } catch (error) {
+      console.error("Run completion hook failed:", error);
     }
   }
 }

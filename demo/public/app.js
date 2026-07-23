@@ -5,6 +5,7 @@ const dashboard = document.querySelector("[data-testid=dashboard]");
 const loadButton = document.querySelector("#load-data");
 const loading = document.querySelector("[data-testid=loading]");
 const orders = document.querySelector("[data-testid=orders]");
+const profileResult = document.querySelector("#profile-result");
 
 loginForm.addEventListener("submit", (event) => {
   event.preventDefault();
@@ -28,3 +29,7 @@ loadButton.addEventListener("click", () => {
   }, 600);
 });
 
+document.querySelector("#load-profile").addEventListener("click", async () => {
+  const response = await fetch("/api/profile");
+  profileResult.textContent = JSON.stringify(await response.json());
+});

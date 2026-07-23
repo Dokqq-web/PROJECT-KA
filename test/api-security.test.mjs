@@ -34,6 +34,18 @@ test("HTTP API enforces roles, secret ownership and audit filters", async (conte
   const baseUrl = `http://127.0.0.1:${port}`;
   await waitForHealth(baseUrl, child, () => logs);
   const adminHeaders = headers(bootstrapKey);
+  const readiness = await request(baseUrl, "/ready");
+  assert.equal(readiness.status, 200);
+  assert.equal(readiness.body.status, "ready");
+
+  const correlated = await fetch(`${baseUrl}/health`, {
+    headers: { "x-request-id": "integration-check-1" }
+  });
+  assert.equal(correlated.headers.get("x-request-id"), "integration-check-1");
+
+  const anonymousMetrics = await request(baseUrl, "/metrics");
+  assert.equal(anonymousMetrics.status, 401);
+
   const editorOne = await createApiKey(baseUrl, adminHeaders, "Editor one", "editor");
   const editorTwo = await createApiKey(baseUrl, adminHeaders, "Editor two", "editor");
   const viewer = await createApiKey(baseUrl, adminHeaders, "Viewer", "viewer");
@@ -65,6 +77,31 @@ test("HTTP API enforces roles, secret ownership and audit filters", async (conte
   });
   assert.equal(ownerSecrets.body.length, 1);
 
+  const savedCase = await request(baseUrl, "/test-cases", {
+    method: "POST",
+    headers: headers(editorOne.key),
+    body: JSON.stringify({
+      id: "SUITE-CASE",
+      name: "Suite case",
+      platform: "web",
+      steps: [{ id: "1", action: "wait", value: "0" }]
+    })
+  });
+  assert.equal(savedCase.status, 201);
+  const suite = await request(baseUrl, "/test-suites", {
+    method: "POST",
+    headers: headers(editorOne.key),
+    body: JSON.stringify({
+      name: "API regression",
+      testCaseIds: [savedCase.body.id]
+    })
+  });
+  assert.equal(suite.status, 201);
+  const suites = await request(baseUrl, "/test-suites", {
+    headers: headers(editorOne.key)
+  });
+  assert.equal(suites.body[0].name, "API regression");
+
   const audit = await request(baseUrl, "/audit?method=POST&status=404", {
     headers: adminHeaders
   });
@@ -82,6 +119,14 @@ test("HTTP API enforces roles, secret ownership and audit filters", async (conte
     { method: "POST", headers: adminHeaders }
   );
   assert.equal(adminRemoval.status, 200);
+
+  const metricsResponse = await fetch(`${baseUrl}/metrics`, {
+    headers: adminHeaders
+  });
+  assert.equal(metricsResponse.status, 200);
+  const metrics = await metricsResponse.text();
+  assert.match(metrics, /qa_bot_http_requests_total/);
+  assert.match(metrics, /qa_bot_queue_limit/);
 });
 
 async function createApiKey(baseUrl, adminHeaders, name, role) {

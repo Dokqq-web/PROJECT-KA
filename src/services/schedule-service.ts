@@ -66,6 +66,10 @@ export class ScheduleService {
     return record;
   }
 
+  close(): void {
+    clearInterval(this.timer);
+  }
+
   private async tick(): Promise<void> {
     if (this.ticking) return;
     this.ticking = true;
@@ -98,4 +102,3 @@ export class ScheduleService {
     }
   }
 }
-

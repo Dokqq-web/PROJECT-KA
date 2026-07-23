@@ -12,11 +12,14 @@ services:
       BOOTSTRAP_NAME: "${BOOTSTRAP_NAME:-Administrator}"
       BOOTSTRAP_ROLE: "admin"
       SECRET_MASTER_KEY: "${SECRET_MASTER_KEY:?Set SECRET_MASTER_KEY}"
+      NOTIFICATION_WEBHOOK_URL: "${NOTIFICATION_WEBHOOK_URL:-}"
+      TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN:-}"
+      TELEGRAM_CHAT_ID: "${TELEGRAM_CHAT_ID:-}"
     volumes:
       - qa-bot-data:/app/data
       - qa-bot-artifacts:/app/artifacts
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://localhost:8080/health').then(r=>{if(!r.ok)process.exit(1)})"]
+      test: ["CMD", "node", "-e", "fetch('http://localhost:8080/ready').then(r=>{if(!r.ok)process.exit(1)})"]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -25,4 +28,3 @@ services:
 volumes:
   qa-bot-data:
   qa-bot-artifacts:
-

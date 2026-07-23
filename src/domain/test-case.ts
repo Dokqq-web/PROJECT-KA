@@ -11,7 +11,16 @@ export type TestStepAction =
   | "apiRequest"
   | "assertJson"
   | "if"
-  | "repeat";
+  | "repeat"
+  | "setFrame"
+  | "resetFrame"
+  | "clickNewTab"
+  | "switchTab"
+  | "uploadFile"
+  | "download"
+  | "mockRoute"
+  | "clearMocks"
+  | "screenshot";
 
 export interface TestStep {
   id: string;
@@ -22,6 +31,7 @@ export interface TestStep {
   method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
   headers?: Record<string, string>;
   saveAs?: string;
+  statusCode?: number;
   steps?: TestStep[];
 }
 

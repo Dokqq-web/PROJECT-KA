@@ -141,6 +141,26 @@
         </div>
       </section>
 
+      <section class="suite-section history-section">
+        <div class="section-title">
+          <div><p class="section-number">03.1</p><h2>Наборы тестов</h2></div>
+          <span class="connector-badge">Regression</span>
+        </div>
+        <form class="suite-form" id="suite-form">
+          <label>Название набора<input id="suite-name" value="Регрессионный набор" required></label>
+          <fieldset>
+            <legend>Сохранённые тест-кейсы</legend>
+            <div class="suite-case-list" id="suite-case-list">
+              <span class="history-empty">Сначала сохраните тест-кейсы.</span>
+            </div>
+          </fieldset>
+          <button class="primary" type="submit"><span>Создать набор</span><span>→</span></button>
+        </form>
+        <div class="suite-list" id="suite-list">
+          <p class="history-empty">Наборов пока нет.</p>
+        </div>
+      </section>
+
       <section class="connector-section history-section">
         <div class="section-title">
           <div>
@@ -279,6 +299,10 @@ assertVisible | [data-testid=dashboard]
           </form>
           <div class="audit-panel">
             <h3>Последние события</h3>
+            <div class="notification-status">
+              <span id="notification-status">Уведомления: проверяем…</span>
+              <button class="secondary compact" id="notification-test" type="button">Тест уведомления</button>
+            </div>
             <form class="audit-filters" id="audit-filters">
               <label>Метод
                 <select id="audit-method">
@@ -360,6 +384,15 @@ assertVisible | [data-testid=dashboard]
             <option value="assertJson">Проверить JSON</option>
             <option value="if">Условие</option>
             <option value="repeat">Повторить группу</option>
+            <option value="setFrame">Перейти в iframe</option>
+            <option value="resetFrame">Выйти из iframe</option>
+            <option value="clickNewTab">Открыть новую вкладку</option>
+            <option value="switchTab">Переключить вкладку</option>
+            <option value="uploadFile">Загрузить файл</option>
+            <option value="download">Скачать файл</option>
+            <option value="mockRoute">Подменить API-ответ</option>
+            <option value="clearMocks">Очистить подмены API</option>
+            <option value="screenshot">Сделать скриншот</option>
           </select>
         </label>
         <label>

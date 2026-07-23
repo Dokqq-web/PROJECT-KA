@@ -40,8 +40,17 @@
           </tbody>
         </table>
       </section>
+
+      <section class="card" id="advanced-lab">
+        <p class="eyebrow">РАСШИРЕННЫЕ СЦЕНАРИИ</p>
+        <iframe title="Тестовый iframe" srcdoc="<button id='frame-button' onclick=&quot;this.textContent='Нажато во фрейме'&quot;>Кнопка во фрейме</button>"></iframe>
+        <p><a id="new-tab-link" href="/tab.html" target="_blank">Открыть новую вкладку</a></p>
+        <label>Тестовая загрузка файла<input id="file-upload" type="file"></label>
+        <p><a id="download-link" download="pilot-report.txt" href="data:text/plain,pilot-download-ok">Скачать отчёт</a></p>
+        <button id="load-profile" type="button">Получить профиль через API</button>
+        <pre id="profile-result"></pre>
+      </section>
     </main>
     <script src="/app.js"></script>
   </body>
 </html>
-

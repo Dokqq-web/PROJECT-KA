@@ -17,7 +17,16 @@ const actions = {
   apiRequest: "API-запрос",
   assertJson: "Проверить JSON",
   if: "Условие",
-  repeat: "Повторить группу"
+  repeat: "Повторить группу",
+  setFrame: "Перейти в iframe",
+  resetFrame: "Выйти из iframe",
+  clickNewTab: "Открыть новую вкладку",
+  switchTab: "Переключить вкладку",
+  uploadFile: "Загрузить файл",
+  download: "Скачать файл",
+  mockRoute: "Подменить API-ответ",
+  clearMocks: "Очистить подмены API",
+  screenshot: "Сделать скриншот"
 };
 
 const exampleSteps = [
@@ -67,7 +76,10 @@ const elements = {
   secretList: document.querySelector("#secret-list"),
   auditList: document.querySelector("#audit-list"),
   auditMethod: document.querySelector("#audit-method"),
-  auditStatus: document.querySelector("#audit-status")
+  auditStatus: document.querySelector("#audit-status"),
+  suiteCaseList: document.querySelector("#suite-case-list"),
+  suiteList: document.querySelector("#suite-list"),
+  notificationStatus: document.querySelector("#notification-status")
 };
 let activeTemplateId = null;
 let activeRunId = null;
@@ -185,6 +197,14 @@ async function loadTemplates() {
       ...records.map((record) => new Option(record.testCase.name, record.id))
     );
     elements.scheduleTemplate.value = selectedTemplate;
+    elements.suiteCaseList.replaceChildren(
+      ...records.map((record) => {
+        const label = document.createElement("label");
+        label.className = "suite-case";
+        label.innerHTML = `<input type="checkbox" value="${escapeHtml(record.id)}"><span>${escapeHtml(record.testCase.name)}</span>`;
+        return label;
+      })
+    );
     elements.libraryCount.textContent = `${records.length} ${pluralize(records.length, "шаблон", "шаблона", "шаблонов")}`;
     if (!records.length) {
       elements.templates.innerHTML = '<p class="history-empty">Сохранённых шаблонов пока нет.</p>';
@@ -214,6 +234,96 @@ async function loadTemplates() {
   } catch {
     elements.templates.innerHTML = '<p class="history-empty">Шаблоны временно недоступны.</p>';
   }
+}
+
+async function createSuite(event) {
+  event.preventDefault();
+  const testCaseIds = [...elements.suiteCaseList.querySelectorAll("input:checked")]
+    .map((input) => input.value);
+  const response = await fetch("/test-suites", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      name: document.querySelector("#suite-name").value.trim(),
+      testCaseIds
+    })
+  });
+  const result = await response.json();
+  elements.message.textContent = response.ok
+    ? "Набор тестов создан"
+    : result.error || "Не удалось создать набор";
+  if (response.ok) await loadSuites();
+}
+
+async function loadSuites() {
+  try {
+    const response = await fetch("/test-suites");
+    const suites = await response.json();
+    if (!response.ok) throw new Error(suites.error);
+    if (!suites.length) {
+      elements.suiteList.innerHTML = '<p class="history-empty">Наборов пока нет.</p>';
+      return;
+    }
+    elements.suiteList.replaceChildren(...suites.map((suite) => {
+      const item = document.createElement("article");
+      item.className = "suite-item";
+      item.innerHTML = `<div><strong>${escapeHtml(suite.name)}</strong><small>${suite.testCaseIds.length} тест-кейсов</small></div><button class="template-run" type="button">Запустить →</button>`;
+      item.querySelector("button").addEventListener("click", () => runSuite(suite.id));
+      return item;
+    }));
+  } catch (error) {
+    elements.suiteList.innerHTML = `<p class="history-empty">${escapeHtml(error.message)}</p>`;
+  }
+}
+
+async function runSuite(id) {
+  const response = await fetch(`/test-suites/${id}/runs`, { method: "POST" });
+  const result = await response.json();
+  if (!response.ok) {
+    elements.message.textContent = result.error || "Не удалось запустить набор";
+    return;
+  }
+  elements.message.textContent = `Набор запущен: ${result.runIds.length} тестов`;
+  await watchSuiteRun(result.id);
+}
+
+async function watchSuiteRun(id) {
+  while (true) {
+    const response = await fetch(`/test-suite-runs/${id}`);
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error);
+    elements.message.textContent = `Набор: ${statusLabel(result.status)} · ${result.runs.length} тестов`;
+    if (result.status === "passed" || result.status === "failed") {
+      await loadHistory();
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+  }
+}
+
+async function loadNotificationStatus() {
+  try {
+    const response = await fetch("/notifications");
+    const status = await response.json();
+    if (!response.ok) throw new Error(status.error);
+    const channels = [
+      status.webhookConfigured ? "Webhook" : "",
+      status.telegramConfigured ? "Telegram" : ""
+    ].filter(Boolean);
+    elements.notificationStatus.textContent = channels.length
+      ? `Уведомления: ${channels.join(" + ")}`
+      : "Уведомления не настроены";
+  } catch (error) {
+    elements.notificationStatus.textContent = error.message || "Статус уведомлений недоступен";
+  }
+}
+
+async function testNotification() {
+  const response = await fetch("/notifications/test", { method: "POST" });
+  const result = await response.json();
+  elements.message.textContent = response.ok
+    ? `Уведомление отправлено: ${result.delivered}/${result.attempted}`
+    : result.error || "Каналы уведомлений не настроены";
 }
 
 async function importFile(event) {
@@ -850,6 +960,8 @@ document.querySelector("#data-amocrm-form").addEventListener("submit", (event) =
 document.querySelector("#schedule-form").addEventListener("submit", createSchedule);
 document.querySelector("#device-form").addEventListener("submit", createDevice);
 document.querySelector("#secret-form").addEventListener("submit", createSecret);
+document.querySelector("#suite-form").addEventListener("submit", createSuite);
+document.querySelector("#notification-test").addEventListener("click", testNotification);
 document.querySelector("#audit-filters").addEventListener("submit", (event) => {
   event.preventDefault();
   loadAudit();
@@ -865,4 +977,6 @@ loadQueue();
 loadDevices();
 loadSecrets();
 loadAudit();
+loadSuites();
+loadNotificationStatus();
 setInterval(loadQueue, 2_000);

@@ -13,7 +13,8 @@
     "demo:integrations": "node demo/integration-mock.mjs",
     "api": "node dist/api/server.js",
     "run:case": "node dist/cli/run-case.js",
-    "test": "node --test test/*.test.mjs"
+    "test": "node --test test/api-security.test.mjs test/metrics.test.mjs test/pilot-features.test.mjs test/security.test.mjs test/smoke.test.mjs",
+    "test:browser": "node --test test/playwright-advanced.test.mjs"
   },
   "dependencies": {
     "playwright": "^1.54.0"

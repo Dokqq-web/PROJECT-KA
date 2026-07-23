@@ -1,4 +1,5 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import type { TestCase, TestStepAction } from "../domain/test-case.js";
@@ -7,6 +8,7 @@ import { RunService } from "../services/run-service.js";
 import { SqliteRunRepository } from "../repositories/sqlite-run-repository.js";
 import { SqliteTestCaseRepository } from "../repositories/sqlite-test-case-repository.js";
 import { TestCaseService } from "../services/test-case-service.js";
+import { TestSuiteService } from "../services/test-suite-service.js";
 import {
   TestCaseImportService,
   type ImportFormat
@@ -28,6 +30,7 @@ import {
 import { SecretVault } from "../security/secret-vault.js";
 import { AuditService } from "../security/audit-service.js";
 import { SqliteDeviceRepository } from "../repositories/sqlite-device-repository.js";
+import { SqliteTestSuiteRepository } from "../repositories/sqlite-test-suite-repository.js";
 import { DeviceService } from "../services/device-service.js";
 import { MobileRunner } from "../runners/mobile-runner.js";
 import { PlatformRunner } from "../runners/platform-runner.js";
@@ -35,17 +38,29 @@ import {
   ResultPublisher,
   type PublishSystem
 } from "../connectors/result-publisher.js";
+import {
+  MetricsService,
+  normalizeRoute
+} from "../operations/metrics-service.js";
+import { NotificationService } from "../services/notification-service.js";
 
 const port = Number(process.env.API_PORT ?? 8080);
 const databasePath = process.env.DATABASE_PATH;
 const concurrency = Math.max(1, Number(process.env.RUN_CONCURRENCY ?? 2) || 2);
 const devices = new DeviceService(new SqliteDeviceRepository(databasePath));
+const notifications = new NotificationService();
 const service = new RunService(
   new PlatformRunner(new PlaywrightRunner(), new MobileRunner(devices)),
   new SqliteRunRepository(databasePath),
-  concurrency
+  concurrency,
+  (run) => notifications.notifyRunCompleted(run)
 );
 const testCases = new TestCaseService(new SqliteTestCaseRepository(databasePath));
+const suites = new TestSuiteService(
+  new SqliteTestSuiteRepository(databasePath),
+  testCases,
+  service
+);
 const schedules = new ScheduleService(
   new SqliteScheduleRepository(databasePath),
   testCases,
@@ -61,6 +76,7 @@ const amoCrmData = new AmoCrmDataConnector();
 const auth = new AuthService(databasePath);
 const vault = new SecretVault(databasePath);
 const audit = new AuditService(databasePath);
+const metrics = new MetricsService();
 const resultPublisher = new ResultPublisher();
 const dashboardDirectory = fileURLToPath(new URL("../../dashboard/", import.meta.url));
 const allowedActions = new Set<TestStepAction>([
@@ -74,11 +90,32 @@ const allowedActions = new Set<TestStepAction>([
   "apiRequest",
   "assertJson",
   "if",
-  "repeat"
+  "repeat",
+  "setFrame",
+  "resetFrame",
+  "clickNewTab",
+  "switchTab",
+  "uploadFile",
+  "download",
+  "mockRoute",
+  "clearMocks",
+  "screenshot"
 ]);
 
-createServer(async (request, response) => {
+const server = createServer(async (request, response) => {
   setCorsHeaders(response);
+  const requestId = requestIdValue(request.headers["x-request-id"]);
+  const startedAt = performance.now();
+  response.setHeader("x-request-id", requestId);
+  response.once("finish", () => {
+    const path = new URL(request.url ?? "/", "http://localhost").pathname;
+    metrics.observe(
+      request.method ?? "UNKNOWN",
+      normalizeRoute(path),
+      response.statusCode,
+      performance.now() - startedAt
+    );
+  });
 
   if (request.method === "OPTIONS") {
     response.writeHead(204).end();
@@ -89,7 +126,7 @@ createServer(async (request, response) => {
     const url = new URL(request.url ?? "/", `http://${request.headers.host}`);
     const isPublic =
       request.method === "GET" &&
-      ["/", "/app.js", "/styles.css", "/health"].includes(url.pathname);
+      ["/", "/app.js", "/styles.css", "/health", "/ready"].includes(url.pathname);
     const principal = auth.authenticate(extractApiKey(request));
     if (!isPublic) {
       response.once("finish", () => {
@@ -195,7 +232,23 @@ createServer(async (request, response) => {
     }
 
     if (request.method === "GET" && url.pathname === "/health") {
-      sendJson(response, 200, { status: "ok", authRequired: auth.required });
+      sendJson(response, 200, {
+        status: "ok",
+        requestId,
+        uptimeSeconds: Math.floor(process.uptime()),
+        authRequired: auth.required
+      });
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/ready") {
+      try {
+        service.queueState();
+        testCases.list();
+        sendJson(response, 200, { status: "ready", requestId });
+      } catch {
+        sendJson(response, 503, { status: "not_ready", requestId });
+      }
       return;
     }
 
@@ -221,6 +274,39 @@ createServer(async (request, response) => {
           to: dateParameter(url, "to")
         })
       );
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/metrics") {
+      if (principal?.role !== "admin") {
+        sendJson(response, 403, { error: "Admin role required" });
+        return;
+      }
+      sendText(
+        response,
+        200,
+        metrics.render(service.queueState()),
+        "text/plain; version=0.0.4; charset=utf-8"
+      );
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/notifications") {
+      if (principal?.role !== "admin") {
+        sendJson(response, 403, { error: "Admin role required" });
+        return;
+      }
+      sendJson(response, 200, notifications.status());
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/notifications/test") {
+      if (principal?.role !== "admin") {
+        sendJson(response, 403, { error: "Admin role required" });
+        return;
+      }
+      const result = await notifications.sendTest();
+      sendJson(response, result.attempted > 0 ? 200 : 503, result);
       return;
     }
 
@@ -362,6 +448,56 @@ createServer(async (request, response) => {
 
     if (request.method === "GET" && url.pathname === "/test-cases") {
       sendJson(response, 200, testCases.list());
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/test-suites") {
+      sendJson(response, 200, suites.list());
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/test-suites") {
+      const body = await readJson(request);
+      if (
+        !isRecord(body) ||
+        typeof body.name !== "string" ||
+        !Array.isArray(body.testCaseIds) ||
+        !body.testCaseIds.every((id) => typeof id === "string")
+      ) {
+        sendJson(response, 400, { error: "name and testCaseIds are required" });
+        return;
+      }
+      sendJson(response, 201, suites.create(body.name, body.testCaseIds));
+      return;
+    }
+
+    const suiteRunMatch = url.pathname.match(
+      /^\/test-suites\/([a-f0-9-]+)\/runs$/i
+    );
+    if (request.method === "POST" && suiteRunMatch) {
+      const record = suites.run(suiteRunMatch[1]!);
+      sendJson(response, 202, {
+        ...record,
+        statusUrl: `/test-suite-runs/${record.id}`
+      });
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/test-suite-runs") {
+      sendJson(response, 200, suites.listRuns());
+      return;
+    }
+
+    const suiteRunStatusMatch = url.pathname.match(
+      /^\/test-suite-runs\/([a-f0-9-]+)$/i
+    );
+    if (request.method === "GET" && suiteRunStatusMatch) {
+      const record = suites.getRun(suiteRunStatusMatch[1]!);
+      sendJson(
+        response,
+        record ? 200 : 404,
+        record ?? { error: "Запуск набора не найден" }
+      );
       return;
     }
 
@@ -598,9 +734,26 @@ createServer(async (request, response) => {
       error: message
     });
   }
-}).listen(port, () => {
+});
+
+server.listen(port, () => {
   console.log(`QA Bot API: http://localhost:${port}`);
 });
+
+for (const signal of ["SIGTERM", "SIGINT"] as const) {
+  process.once(signal, () => {
+    console.log(`Received ${signal}, stopping QA Bot API`);
+    const forcedExit = setTimeout(() => process.exit(1), 10_000);
+    forcedExit.unref();
+    server.close(() => {
+      schedules.close();
+      audit.close();
+      vault.close();
+      auth.close();
+      process.exit(0);
+    });
+  });
+}
 
 async function readJson(request: IncomingMessage): Promise<unknown> {
   const chunks: Buffer[] = [];
@@ -657,13 +810,31 @@ function sendJson(response: ServerResponse, status: number, body: unknown): void
   response.end(JSON.stringify(body, null, 2));
 }
 
+function sendText(
+  response: ServerResponse,
+  status: number,
+  body: string,
+  contentType: string
+): void {
+  response.writeHead(status, { "content-type": contentType });
+  response.end(body);
+}
+
 function setCorsHeaders(response: ServerResponse): void {
   response.setHeader("access-control-allow-origin", "*");
   response.setHeader("access-control-allow-methods", "GET, POST, PUT, OPTIONS");
   response.setHeader(
     "access-control-allow-headers",
-    "content-type, authorization, x-api-key"
+    "content-type, authorization, x-api-key, x-request-id"
   );
+  response.setHeader("access-control-expose-headers", "x-request-id");
+}
+
+function requestIdValue(value: string | string[] | undefined): string {
+  const candidate = Array.isArray(value) ? value[0] : value;
+  return candidate && /^[a-zA-Z0-9._-]{1,100}$/.test(candidate)
+    ? candidate
+    : randomUUID();
 }
 
 function extractApiKey(request: IncomingMessage): string | undefined {

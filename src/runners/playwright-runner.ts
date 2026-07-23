@@ -1,7 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import { resolve } from "node:path";
-import { chromium, type Page } from "playwright";
+import {
+  chromium,
+  type FrameLocator,
+  type Locator,
+  type Page
+} from "playwright";
 import type {
   StepResult,
   TestCase,
@@ -37,6 +42,7 @@ export class PlaywrightRunner implements TestRunner {
     const abort = () => void browser.close().catch(() => undefined);
     signal?.addEventListener("abort", abort, { once: true });
     const page = await browser.newPage();
+    const state: BrowserState = { page };
     const variables = { ...(testCase.variables ?? {}) };
     const steps: StepResult[] = [];
     let failed = false;
@@ -57,12 +63,19 @@ export class PlaywrightRunner implements TestRunner {
 
         const stepStartedAt = new Date().toISOString();
         try {
-          await executeStep(page, testCase, step, variables);
+          const artifacts = await executeStep(
+            state,
+            testCase,
+            step,
+            variables,
+            artifactsDirectory
+          );
           steps.push({
             stepId: step.id,
             status: "passed",
             startedAt: stepStartedAt,
-            finishedAt: new Date().toISOString()
+            finishedAt: new Date().toISOString(),
+            artifacts: artifacts.length > 0 ? artifacts : undefined
           });
         } catch (error) {
           if (signal?.aborted) {
@@ -73,7 +86,7 @@ export class PlaywrightRunner implements TestRunner {
             artifactsDirectory,
             `step-${safeName(step.id)}-failure.png`
           );
-          await page.screenshot({ path: screenshotPath, fullPage: true });
+          await state.page.screenshot({ path: screenshotPath, fullPage: true });
           steps.push({
             stepId: step.id,
             status: "failed",
@@ -101,11 +114,13 @@ export class PlaywrightRunner implements TestRunner {
 }
 
 async function executeStep(
-  page: Page,
+  state: BrowserState,
   testCase: TestCase,
   step: TestStep,
-  variables: Record<string, string>
-): Promise<void> {
+  variables: Record<string, string>,
+  artifactsDirectory: string
+): Promise<string[]> {
+  const page = state.page;
   const target = interpolate(step.target, variables);
   const value = interpolate(step.value, variables);
   const timeout = step.timeoutMs ?? 10_000;
@@ -115,40 +130,40 @@ async function executeStep(
       if (!target) throw new Error("open requires target");
       const url = new URL(target, testCase.baseUrl).toString();
       await page.goto(url, { waitUntil: "domcontentloaded", timeout });
-      return;
+      return [];
     }
     case "click":
-      await requiredLocator(page, target).click({ timeout });
-      return;
+      await requiredLocator(state, target).click({ timeout });
+      return [];
     case "fill":
-      await requiredLocator(page, target).fill(value ?? "", { timeout });
-      return;
+      await requiredLocator(state, target).fill(value ?? "", { timeout });
+      return [];
     case "select":
-      await requiredLocator(page, target).selectOption(value ?? "", { timeout });
-      return;
+      await requiredLocator(state, target).selectOption(value ?? "", { timeout });
+      return [];
     case "assertText": {
       if (value === undefined) throw new Error("assertText requires value");
-      const locator = requiredLocator(page, target);
+      const locator = requiredLocator(state, target);
       await locator.waitFor({ state: "visible", timeout });
       const actual = (await locator.textContent()) ?? "";
       if (!actual.includes(value)) {
         throw new Error(`Expected text "${value}", received "${actual.trim()}"`);
       }
-      return;
+      return [];
     }
     case "assertVisible":
-      await requiredLocator(page, target).waitFor({
+      await requiredLocator(state, target).waitFor({
         state: "visible",
         timeout
       });
-      return;
+      return [];
     case "wait": {
       const milliseconds = Number(value ?? target);
       if (!Number.isFinite(milliseconds) || milliseconds < 0) {
         throw new Error("wait requires a non-negative duration");
       }
       await page.waitForTimeout(milliseconds);
-      return;
+      return [];
     }
     case "apiRequest": {
       if (!target) throw new Error("apiRequest requires target URL");
@@ -175,7 +190,7 @@ async function executeStep(
         );
       }
       if (step.saveAs) variables[step.saveAs] = responseText;
-      return;
+      return [];
     }
     case "assertJson": {
       if (!step.target) throw new Error("assertJson requires target");
@@ -194,16 +209,16 @@ async function executeStep(
           `Expected JSON ${step.target}="${value ?? ""}", received "${String(actual)}"`
         );
       }
-      return;
+      return [];
     }
     case "if": {
       if (!step.target) throw new Error("if requires variable name in target");
       if (variables[step.target] === (value ?? "")) {
         for (const nested of step.steps ?? []) {
-          await executeStep(page, testCase, nested, variables);
+          await executeStep(state, testCase, nested, variables, artifactsDirectory);
         }
       }
-      return;
+      return [];
     }
     case "repeat": {
       const count = Number(value ?? step.target);
@@ -213,17 +228,97 @@ async function executeStep(
       for (let index = 0; index < count; index += 1) {
         variables.repeatIndex = String(index);
         for (const nested of step.steps ?? []) {
-          await executeStep(page, testCase, nested, variables);
+          await executeStep(state, testCase, nested, variables, artifactsDirectory);
         }
       }
-      return;
+      return [];
+    }
+    case "setFrame":
+      if (!target) throw new Error("setFrame requires iframe selector");
+      state.frame = state.page.frameLocator(target);
+      return [];
+    case "resetFrame":
+      state.frame = undefined;
+      return [];
+    case "clickNewTab": {
+      const newPagePromise = state.page.context().waitForEvent("page", { timeout });
+      await requiredLocator(state, target).click({ timeout });
+      state.page = await newPagePromise;
+      state.frame = undefined;
+      await state.page.waitForLoadState("domcontentloaded", { timeout });
+      return [];
+    }
+    case "switchTab": {
+      const pages = state.page.context().pages();
+      const index = value === "last" || target === "last"
+        ? pages.length - 1
+        : Number(value ?? target);
+      if (!Number.isInteger(index) || index < 0 || index >= pages.length) {
+        throw new Error(`switchTab index is out of range: ${String(value ?? target)}`);
+      }
+      state.page = pages[index]!;
+      state.frame = undefined;
+      await state.page.bringToFront();
+      return [];
+    }
+    case "uploadFile":
+      if (!value) throw new Error("uploadFile requires file path in value");
+      await requiredLocator(state, target).setInputFiles(resolve(value), { timeout });
+      return [];
+    case "download": {
+      const downloadPromise = state.page.waitForEvent("download", { timeout });
+      await requiredLocator(state, target).click({ timeout });
+      const download = await downloadPromise;
+      const name = safeArtifactName(value || download.suggestedFilename());
+      const path = resolve(artifactsDirectory, name);
+      await download.saveAs(path);
+      return [path];
+    }
+    case "mockRoute": {
+      if (!target) throw new Error("mockRoute requires URL glob in target");
+      let body: unknown = value ?? "";
+      try {
+        body = value === undefined ? "" : JSON.parse(value);
+      } catch {
+        body = value;
+      }
+      await state.page.route(target, async (route) => {
+        await route.fulfill({
+          status: step.statusCode ?? 200,
+          contentType: typeof body === "string" ? "text/plain" : "application/json",
+          body: typeof body === "string" ? body : JSON.stringify(body),
+          headers: step.headers
+        });
+      });
+      return [];
+    }
+    case "clearMocks":
+      await state.page.unroute(target || "**/*");
+      return [];
+    case "screenshot": {
+      const path = resolve(
+        artifactsDirectory,
+        safeArtifactName(value || `step-${step.id}.png`)
+      );
+      await state.page.screenshot({ path, fullPage: true });
+      return [path];
     }
   }
 }
 
-function requiredLocator(page: Page, target: string | undefined) {
+interface BrowserState {
+  page: Page;
+  frame?: FrameLocator;
+}
+
+function requiredLocator(
+  state: BrowserState,
+  target: string | undefined
+): Locator {
   if (!target) throw new Error("Step requires target");
-  return page.locator(target).first();
+  return (state.frame
+    ? state.frame.locator(target)
+    : state.page.locator(target)).first();
 }
 
 function interpolate(
@@ -245,4 +340,8 @@ function interpolate(
 
 function safeName(value: string): string {
   return value.replace(/[^a-zA-Z0-9_-]/g, "_");
+}
+
+function safeArtifactName(value: string): string {
+  return value.replace(/[^a-zA-Z0-9_.-]/g, "_");
 }
