@@ -1,0 +1,18 @@
+{
+  "testCases": [
+    {
+      "id": "JSON-LOGIN-001",
+      "name": "Вход из JSON",
+      "platform": "web",
+      "baseUrl": "http://localhost:4173",
+      "steps": [
+        { "id": "1", "action": "open", "target": "/" },
+        { "id": "2", "action": "fill", "target": "[name=email]", "value": "qa@example.test" },
+        { "id": "3", "action": "fill", "target": "[name=password]", "value": "testing123" },
+        { "id": "4", "action": "click", "target": "button[type=submit]" },
+        { "id": "5", "action": "assertVisible", "target": "[data-testid=dashboard]" }
+      ],
+      "source": { "system": "manual" }
+    }
+  ]
+}

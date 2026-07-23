@@ -1,0 +1,28 @@
+services:
+  qa-bot:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      API_PORT: "8080"
+      DATABASE_PATH: "/app/data/qa-bot.db"
+      RUN_CONCURRENCY: "${RUN_CONCURRENCY:-2}"
+      BOOTSTRAP_API_KEY: "${BOOTSTRAP_API_KEY:?Set BOOTSTRAP_API_KEY}"
+      BOOTSTRAP_NAME: "${BOOTSTRAP_NAME:-Administrator}"
+      BOOTSTRAP_ROLE: "admin"
+      SECRET_MASTER_KEY: "${SECRET_MASTER_KEY:?Set SECRET_MASTER_KEY}"
+    volumes:
+      - qa-bot-data:/app/data
+      - qa-bot-artifacts:/app/artifacts
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:8080/health').then(r=>{if(!r.ok)process.exit(1)})"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+volumes:
+  qa-bot-data:
+  qa-bot-artifacts:
+

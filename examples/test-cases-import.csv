@@ -1,0 +1,6 @@
+testCaseId,testCaseName,baseUrl,stepId,action,target,value,timeoutMs
+CSV-LOGIN-001,Вход из CSV,http://localhost:4173,1,open,/,,
+CSV-LOGIN-001,Вход из CSV,http://localhost:4173,2,fill,[name=email],qa@example.test,
+CSV-LOGIN-001,Вход из CSV,http://localhost:4173,3,fill,[name=password],testing123,
+CSV-LOGIN-001,Вход из CSV,http://localhost:4173,4,click,button[type=submit],,
+CSV-LOGIN-001,Вход из CSV,http://localhost:4173,5,assertVisible,[data-testid=dashboard],,10000

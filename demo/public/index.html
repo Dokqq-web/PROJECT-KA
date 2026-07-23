@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>QA Test Lab</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <main>
+      <section class="card" id="login-panel">
+        <p class="eyebrow">QA AUTOMATION BOT</p>
+        <h1>Тестовый стенд</h1>
+        <p>Используйте <strong>qa@example.test</strong> и пароль <strong>testing123</strong>.</p>
+        <form id="login-form">
+          <label>
+            Электронная почта
+            <input name="email" type="email" autocomplete="username" required>
+          </label>
+          <label>
+            Пароль
+            <input name="password" type="password" autocomplete="current-password" required>
+          </label>
+          <button type="submit">Войти</button>
+          <p data-testid="login-error" class="error" hidden>Неверный логин или пароль</p>
+        </form>
+      </section>
+
+      <section class="card" data-testid="dashboard" hidden>
+        <p class="eyebrow">ЛИЧНЫЙ КАБИНЕТ</p>
+        <h1>Добро пожаловать, QA!</h1>
+        <p>Этот экран подтверждает успешную авторизацию.</p>
+        <button id="load-data">Загрузить тестовые данные</button>
+        <p data-testid="loading" hidden>Загрузка…</p>
+        <table data-testid="orders" hidden>
+          <thead><tr><th>Заказ</th><th>Статус</th><th>Сумма</th></tr></thead>
+          <tbody>
+            <tr><td>TEST-001</td><td>Создан</td><td>1 500 ₽</td></tr>
+            <tr><td>TEST-002</td><td>Оплачен</td><td>2 900 ₽</td></tr>
+          </tbody>
+        </table>
+      </section>
+    </main>
+    <script src="/app.js"></script>
+  </body>
+</html>
+

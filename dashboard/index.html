@@ -1,0 +1,341 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="Панель управления автоматизированными тестами">
+    <title>AK QA Bot</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="AK QA Bot — главная">
+        <span class="brand-mark">AK</span>
+        <span>
+          <strong>QA Bot</strong>
+          <small>Automation workspace</small>
+        </span>
+      </a>
+      <div class="service-status">
+        <span class="status-dot" id="service-dot"></span>
+        <span id="service-label">Проверяем сервис…</span>
+        <button class="access-key" id="access-key" type="button">Ключ доступа</button>
+      </div>
+    </header>
+
+    <main>
+      <section class="hero">
+        <div>
+          <p class="eyebrow">ЦЕНТР УПРАВЛЕНИЯ ТЕСТАМИ</p>
+          <h1>Запускайте проверки<br>без ручной рутины.</h1>
+        </div>
+        <p class="hero-copy">
+          Соберите сценарий из простых действий, отправьте его боту и следите
+          за выполнением каждого шага в реальном времени.
+        </p>
+      </section>
+
+      <section class="workspace">
+        <article class="panel editor-panel">
+          <div class="panel-heading">
+            <div>
+              <p class="section-number">01</p>
+              <h2>Новый тест</h2>
+            </div>
+            <div class="heading-actions">
+              <button class="secondary compact" id="save-case" type="button">Сохранить</button>
+              <button class="secondary compact" id="load-example" type="button">Заполнить пример</button>
+            </div>
+          </div>
+
+          <form id="test-form">
+            <div class="field-grid">
+              <label>
+                Название
+                <input id="test-name" value="Успешный вход пользователя" required>
+              </label>
+              <label>
+                Адрес приложения
+                <input id="base-url" type="url" value="http://localhost:4173" required>
+              </label>
+              <label class="variables-field">
+                Переменные теста (JSON)
+                <textarea id="test-variables" rows="3" spellcheck="false">{"login":"qa@example.test","password":"testing123"}</textarea>
+              </label>
+            </div>
+
+            <div class="steps-heading">
+              <div>
+                <span>Сценарий</span>
+                <small id="step-count">5 шагов</small>
+              </div>
+              <button class="secondary compact" id="add-step" type="button">+ Добавить шаг</button>
+            </div>
+            <div id="steps" class="steps"></div>
+
+            <div class="form-footer">
+              <p id="form-message" role="status"></p>
+              <button class="primary" id="run-button" type="submit">
+                <span>Запустить тест</span>
+                <span aria-hidden="true">→</span>
+              </button>
+            </div>
+          </form>
+        </article>
+
+        <aside class="panel result-panel">
+          <div class="panel-heading">
+            <div>
+              <p class="section-number">02</p>
+              <h2>Последний запуск</h2>
+            </div>
+            <div class="run-controls">
+              <button class="cancel-run" id="cancel-run" type="button" hidden>Отменить</button>
+              <span class="run-badge idle" id="run-badge">Ожидает</span>
+            </div>
+          </div>
+
+          <div class="empty-result" id="empty-result">
+            <div class="radar"><span></span></div>
+            <h3>Готов к проверке</h3>
+            <p>Результаты шагов появятся здесь после запуска сценария.</p>
+          </div>
+
+          <div id="result" class="result" hidden>
+            <div class="result-summary">
+              <div>
+                <span>Результат</span>
+                <strong id="result-status">—</strong>
+              </div>
+              <div>
+                <span>Выполнено</span>
+                <strong id="result-progress">—</strong>
+              </div>
+              <div>
+                <span>Время</span>
+                <strong id="result-duration">—</strong>
+              </div>
+            </div>
+            <ol id="result-steps" class="result-steps"></ol>
+          </div>
+        </aside>
+      </section>
+
+      <section class="library-section history-section">
+        <div class="section-title">
+          <div>
+            <p class="section-number">03</p>
+            <h2>Шаблоны тестов</h2>
+          </div>
+          <div class="library-tools">
+            <span class="library-count" id="library-count">0 шаблонов</span>
+            <label class="import-button">
+              Импорт CSV/JSON
+              <input id="import-file" type="file" accept=".csv,.json,text/csv,application/json">
+            </label>
+          </div>
+        </div>
+        <div class="import-report" id="import-report" role="status" hidden></div>
+        <div class="template-list" id="template-list">
+          <p class="history-empty">Сохранённых шаблонов пока нет.</p>
+        </div>
+      </section>
+
+      <section class="connector-section history-section">
+        <div class="section-title">
+          <div>
+            <p class="section-number">04</p>
+            <h2>Интеграции</h2>
+          </div>
+          <span class="connector-badge">YouTrack</span>
+        </div>
+        <div class="connector-layout">
+          <div class="connector-intro">
+            <strong>Импорт задач как тест-кейсов</strong>
+            <p>Запустите демонстрацию без аккаунта или подключите свой YouTrack permanent token.</p>
+            <button class="primary connector-demo" id="youtrack-demo" type="button">
+              <span>Запустить демо-импорт</span><span>→</span>
+            </button>
+          </div>
+          <form class="connector-form" id="youtrack-form">
+            <label>
+              Адрес YouTrack
+              <input id="youtrack-url" type="url" placeholder="https://company.youtrack.cloud">
+            </label>
+            <label>
+              Permanent token
+              <input id="youtrack-token" type="password" autocomplete="off" placeholder="perm:…">
+            </label>
+            <label>
+              Поисковый запрос
+              <input id="youtrack-query" placeholder="project: QA tag: autotest">
+            </label>
+            <button class="secondary connector-submit" type="submit">Подключить и импортировать</button>
+          </form>
+        </div>
+        <div class="import-report" id="youtrack-report" role="status" hidden></div>
+        <details class="format-help">
+          <summary>Формат теста в описании задачи</summary>
+          <pre>```qa
+baseUrl=https://test.example.com
+open | /login
+fill | [name=email] | qa@example.com
+click | button[type=submit]
+assertVisible | [data-testid=dashboard]
+```</pre>
+        </details>
+
+        <div class="connector-divider"></div>
+        <div class="connector-header">
+          <div><span class="connector-badge jira">Jira Cloud</span><strong>Импорт задач по JQL</strong></div>
+          <button class="secondary compact" id="jira-demo" type="button">Демо-импорт</button>
+        </div>
+        <form class="connector-form connector-wide" id="jira-form">
+          <label>Адрес Jira<input id="jira-url" type="url" placeholder="https://company.atlassian.net"></label>
+          <label>Email<input id="jira-email" type="email" placeholder="qa@company.ru"></label>
+          <label>API token<input id="jira-token" type="password" autocomplete="off" placeholder="Токен Atlassian"></label>
+          <label>JQL<input id="jira-query" placeholder="project = QA AND labels = autotest"></label>
+          <button class="secondary connector-submit" type="submit">Подключить Jira и импортировать</button>
+        </form>
+        <div class="import-report" id="jira-report" role="status" hidden></div>
+
+        <div class="connector-divider"></div>
+        <div class="connector-header">
+          <div><span class="connector-badge kaiten">Kaiten</span><strong>Импорт карточек</strong></div>
+          <button class="secondary compact" id="kaiten-demo" type="button">Демо-импорт</button>
+        </div>
+        <form class="connector-form connector-wide kaiten-form" id="kaiten-form">
+          <label>Адрес Kaiten<input id="kaiten-url" type="url" placeholder="https://company.kaiten.ru"></label>
+          <label>Bearer token<input id="kaiten-token" type="password" autocomplete="off" placeholder="Токен Kaiten"></label>
+          <label>Поиск по карточкам<input id="kaiten-query" placeholder="autotest"></label>
+          <button class="secondary connector-submit" type="submit">Подключить Kaiten и импортировать</button>
+        </form>
+        <div class="import-report" id="kaiten-report" role="status" hidden></div>
+      </section>
+
+      <section class="data-section history-section">
+        <div class="section-title">
+          <div>
+            <p class="section-number">05</p>
+            <h2>Тестовые данные</h2>
+          </div>
+          <span class="library-count">1С · Битрикс24 · amoCRM</span>
+        </div>
+        <p class="data-lead">Получите записи из бизнес-системы и перенесите выбранную запись в переменные текущего теста.</p>
+        <div class="data-connectors">
+          <article class="data-card">
+            <div class="data-card-title"><strong>1С OData</strong><button type="button" data-demo="1c">Демо</button></div>
+            <form id="data-1c-form">
+              <input id="data-1c-url" type="url" placeholder="OData URL">
+              <input id="data-1c-user" placeholder="Пользователь">
+              <input id="data-1c-password" type="password" placeholder="Пароль">
+              <input id="data-1c-entity" placeholder="Catalog_Номенклатура">
+              <input id="data-1c-filter" placeholder="$filter (необязательно)">
+              <button class="secondary" type="submit">Получить данные</button>
+            </form>
+            <div class="data-results" id="data-1c-results"></div>
+          </article>
+          <article class="data-card">
+            <div class="data-card-title"><strong>Битрикс24</strong><button type="button" data-demo="bitrix24">Демо</button></div>
+            <form id="data-bitrix24-form">
+              <input id="data-bitrix24-webhook" type="url" placeholder="URL входящего вебхука">
+              <input id="data-bitrix24-type" type="number" value="3" placeholder="entityTypeId">
+              <button class="secondary" type="submit">Получить данные</button>
+            </form>
+            <div class="data-results" id="data-bitrix24-results"></div>
+          </article>
+          <article class="data-card">
+            <div class="data-card-title"><strong>amoCRM</strong><button type="button" data-demo="amocrm">Демо</button></div>
+            <form id="data-amocrm-form">
+              <input id="data-amocrm-url" type="url" placeholder="https://company.amocrm.ru">
+              <input id="data-amocrm-token" type="password" placeholder="OAuth access token">
+              <input id="data-amocrm-query" placeholder="Поиск контакта">
+              <button class="secondary" type="submit">Получить данные</button>
+            </form>
+            <div class="data-results" id="data-amocrm-results"></div>
+          </article>
+        </div>
+        <div class="import-report" id="data-report" role="status" hidden></div>
+      </section>
+
+      <section class="device-section history-section">
+        <div class="section-title">
+          <div><p class="section-number">06</p><h2>Мобильные устройства</h2></div>
+          <span class="connector-badge">Appium</span>
+        </div>
+        <form class="device-form" id="device-form">
+          <label>Название<input id="device-name" placeholder="Android Emulator"></label>
+          <label>Платформа<select id="device-platform"><option value="android">Android</option><option value="ios">iOS</option></select></label>
+          <label>Appium endpoint<input id="device-endpoint" type="url" value="http://localhost:4723"></label>
+          <label class="device-capabilities">Capabilities JSON<textarea id="device-capabilities">{"appium:automationName":"UiAutomator2","appium:deviceName":"Android Emulator"}</textarea></label>
+          <button class="primary" type="submit"><span>Добавить устройство</span><span>→</span></button>
+        </form>
+        <div class="schedule-list" id="device-list"><p class="history-empty">Устройств пока нет.</p></div>
+      </section>
+
+      <section class="schedule-section history-section">
+        <div class="section-title">
+          <div>
+            <p class="section-number">07</p>
+            <h2>Расписание</h2>
+          </div>
+          <span class="queue-state" id="queue-state">Очередь: —</span>
+        </div>
+        <form class="schedule-form" id="schedule-form">
+          <label>Название<input id="schedule-name" value="Регрессионная проверка"></label>
+          <label>Шаблон<select id="schedule-template" required><option value="">Выберите шаблон</option></select></label>
+          <label>Первый запуск<input id="schedule-run-at" type="datetime-local" required></label>
+          <label>Повторять каждые, минут<input id="schedule-repeat" type="number" min="1" placeholder="Не повторять"></label>
+          <button class="primary" type="submit"><span>Запланировать</span><span>→</span></button>
+        </form>
+        <div class="schedule-list" id="schedule-list"><p class="history-empty">Расписаний пока нет.</p></div>
+      </section>
+
+      <section class="history-section">
+        <div class="section-title">
+          <div>
+            <p class="section-number">08</p>
+            <h2>История запусков</h2>
+          </div>
+          <button class="secondary compact" id="refresh-history" type="button">Обновить</button>
+        </div>
+        <div class="history-list" id="history-list">
+          <p class="history-empty">Запусков пока нет.</p>
+        </div>
+      </section>
+    </main>
+
+    <template id="step-template">
+      <div class="step-row">
+        <span class="step-index"></span>
+        <label>
+          <span class="sr-only">Действие</span>
+          <select class="step-action">
+            <option value="open">Открыть страницу</option>
+            <option value="fill">Заполнить поле</option>
+            <option value="click">Нажать</option>
+            <option value="assertVisible">Проверить видимость</option>
+            <option value="assertText">Проверить текст</option>
+            <option value="select">Выбрать значение</option>
+            <option value="wait">Подождать</option>
+            <option value="apiRequest">API-запрос</option>
+            <option value="assertJson">Проверить JSON</option>
+            <option value="if">Условие</option>
+            <option value="repeat">Повторить группу</option>
+          </select>
+        </label>
+        <label>
+          <span class="sr-only">Цель или селектор</span>
+          <input class="step-target" placeholder="Селектор или путь">
+        </label>
+        <label>
+          <span class="sr-only">Значение</span>
+          <input class="step-value" placeholder="Значение">
+        </label>
+        <button class="remove-step" type="button" aria-label="Удалить шаг">×</button>
+      </div>
+    </template>
+
+    <script src="/app.js"></script>
+  </body>
+</html>

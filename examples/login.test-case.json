@@ -1,0 +1,20 @@
+{
+  "id": "WEB-LOGIN-001",
+  "name": "Успешный вход пользователя",
+  "platform": "web",
+  "baseUrl": "http://localhost:4173",
+  "variables": {
+    "login": "qa@example.test",
+    "password": "testing123"
+  },
+  "steps": [
+    { "id": "1", "action": "open", "target": "/" },
+    { "id": "2", "action": "fill", "target": "[name=email]", "value": "${login}" },
+    { "id": "3", "action": "fill", "target": "[name=password]", "value": "${password}" },
+    { "id": "4", "action": "click", "target": "button[type=submit]" },
+    { "id": "5", "action": "assertVisible", "target": "[data-testid=dashboard]" }
+  ],
+  "source": {
+    "system": "manual"
+  }
+}

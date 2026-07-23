@@ -1,0 +1,27 @@
+{
+  "name": "qa-automation-bot",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.9.0",
+  "description": "Headless QA automation service for web and mobile applications",
+  "scripts": {
+    "build": "tsc",
+    "check": "tsc --noEmit",
+    "demo": "node demo/server.mjs",
+    "demo:appium": "node demo/appium-mock.mjs",
+    "api": "node dist/api/server.js",
+    "run:case": "node dist/cli/run-case.js",
+    "test": "node --test test/smoke.test.mjs"
+  },
+  "dependencies": {
+    "playwright": "^1.54.0"
+  },
+  "engines": {
+    "node": ">=22.5"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.8.0"
+  }
+}
