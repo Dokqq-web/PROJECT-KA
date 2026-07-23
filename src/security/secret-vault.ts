@@ -86,11 +86,18 @@ export class SecretVault {
     return rows.map((row) => ({ id: row.id, name: row.name, ownerId: row.owner_id }));
   }
 
-  read(id: string): string | undefined {
+  read(
+    id: string,
+    requesterId?: string,
+    allowAll = false
+  ): string | undefined {
     const row = this.database
       .prepare("SELECT * FROM secrets WHERE id = ?")
       .get(id) as unknown as SecretRow | undefined;
     if (!row) return undefined;
+    if (!allowAll && requesterId && row.owner_id !== requesterId) {
+      return undefined;
+    }
     const decipher = createDecipheriv(
       "aes-256-gcm",
       this.requiredKey(),
@@ -103,10 +110,17 @@ export class SecretVault {
     ]).toString("utf8");
   }
 
-  remove(id: string): boolean {
-    return Number(
-      this.database.prepare("DELETE FROM secrets WHERE id = ?").run(id).changes
-    ) > 0;
+  remove(id: string, requesterId?: string, allowAll = false): boolean {
+    const result = allowAll
+      ? this.database.prepare("DELETE FROM secrets WHERE id = ?").run(id)
+      : this.database
+          .prepare("DELETE FROM secrets WHERE id = ? AND owner_id = ?")
+          .run(id, requesterId ?? "");
+    return Number(result.changes) > 0;
+  }
+
+  close(): void {
+    this.database.close();
   }
 
   private encrypt(value: string): { iv: string; tag: string; ciphertext: string } {
@@ -128,4 +142,3 @@ export class SecretVault {
     return this.key;
   }
 }
-

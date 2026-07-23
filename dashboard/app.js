@@ -63,7 +63,11 @@ const elements = {
   queueState: document.querySelector("#queue-state"),
   scheduleTemplate: document.querySelector("#schedule-template"),
   scheduleList: document.querySelector("#schedule-list"),
-  deviceList: document.querySelector("#device-list")
+  deviceList: document.querySelector("#device-list"),
+  secretList: document.querySelector("#secret-list"),
+  auditList: document.querySelector("#audit-list"),
+  auditMethod: document.querySelector("#audit-method"),
+  auditStatus: document.querySelector("#audit-status")
 };
 let activeTemplateId = null;
 let activeRunId = null;
@@ -253,6 +257,7 @@ async function importYouTrack(mode) {
     mode,
     baseUrl: document.querySelector("#youtrack-url").value.trim(),
     token: document.querySelector("#youtrack-token").value,
+    tokenSecretId: document.querySelector("#youtrack-token-secret").value,
     query: document.querySelector("#youtrack-query").value.trim()
   };
 
@@ -486,6 +491,80 @@ async function createDevice(event) {
   if (response.ok) await loadDevices();
 }
 
+async function loadSecrets() {
+  try {
+    const response = await fetch("/secrets");
+    const secrets = await response.json();
+    if (!response.ok) throw new Error(secrets.error);
+    elements.secretList.replaceChildren(
+      ...secrets.map((secret) => {
+        const item = document.createElement("div");
+        item.className = "secret-item";
+        item.innerHTML = `<span>${escapeHtml(secret.name)}</span><button type="button">Удалить</button>`;
+        item.querySelector("button").addEventListener("click", async () => {
+          await fetch(`/secrets/${secret.id}/remove`, { method: "POST" });
+          await loadSecrets();
+        });
+        return item;
+      })
+    );
+    document.querySelectorAll("[data-secret-select]").forEach((select) => {
+      const selected = select.value;
+      const firstLabel = select.options[0]?.textContent || "Не использовать";
+      select.replaceChildren(
+        new Option(firstLabel, ""),
+        ...secrets.map((secret) => new Option(secret.name, secret.id))
+      );
+      select.value = selected;
+    });
+  } catch (error) {
+    elements.secretList.innerHTML = `<p class="history-empty">${escapeHtml(error.message || "Vault недоступен")}</p>`;
+  }
+}
+
+async function createSecret(event) {
+  event.preventDefault();
+  const response = await fetch("/secrets", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      name: document.querySelector("#secret-name").value.trim(),
+      value: document.querySelector("#secret-value").value
+    })
+  });
+  const result = await response.json();
+  elements.message.textContent = response.ok
+    ? "Секрет зашифрован и сохранён"
+    : result.error || "Не удалось сохранить секрет";
+  document.querySelector("#secret-value").value = "";
+  if (response.ok) await loadSecrets();
+}
+
+async function loadAudit() {
+  try {
+    const parameters = new URLSearchParams({ limit: "30" });
+    if (elements.auditMethod.value) {
+      parameters.set("method", elements.auditMethod.value);
+    }
+    if (elements.auditStatus.value) {
+      parameters.set("status", elements.auditStatus.value);
+    }
+    const response = await fetch(`/audit?${parameters}`);
+    const events = await response.json();
+    if (!response.ok) throw new Error(events.error);
+    elements.auditList.replaceChildren(
+      ...events.map((event) => {
+        const item = document.createElement("div");
+        item.className = "audit-item";
+        item.innerHTML = `<span><strong>${event.statusCode}</strong> ${escapeHtml(event.method)} ${escapeHtml(event.path)}</span><span>${escapeHtml(event.principalName || "anonymous")}<br>${new Date(event.timestamp).toLocaleString("ru-RU")}</span>`;
+        return item;
+      })
+    );
+  } catch (error) {
+    elements.auditList.innerHTML = `<p class="history-empty">${escapeHtml(error.message || "Аудит недоступен")}</p>`;
+  }
+}
+
 function buildTestCase() {
   const rows = [...elements.steps.querySelectorAll(".step-row")];
   if (rows.length === 0) throw new Error("Добавьте хотя бы один шаг");
@@ -661,6 +740,8 @@ function configureAccessKey() {
   checkHealth();
   loadTemplates();
   loadHistory();
+  loadSecrets();
+  loadAudit();
 }
 
 function setFormState(running, message) {
@@ -717,6 +798,7 @@ elements.jiraForm.addEventListener("submit", (event) => {
     baseUrl: document.querySelector("#jira-url").value.trim(),
     email: document.querySelector("#jira-email").value.trim(),
     token: document.querySelector("#jira-token").value,
+    tokenSecretId: document.querySelector("#jira-token-secret").value,
     query: document.querySelector("#jira-query").value.trim()
   });
 });
@@ -728,6 +810,7 @@ elements.kaitenForm.addEventListener("submit", (event) => {
   importConnector("kaiten", "live", {
     baseUrl: document.querySelector("#kaiten-url").value.trim(),
     token: document.querySelector("#kaiten-token").value,
+    tokenSecretId: document.querySelector("#kaiten-token-secret").value,
     query: document.querySelector("#kaiten-query").value.trim()
   });
 });
@@ -742,6 +825,7 @@ document.querySelector("#data-1c-form").addEventListener("submit", (event) => {
     baseUrl: document.querySelector("#data-1c-url").value.trim(),
     username: document.querySelector("#data-1c-user").value,
     password: document.querySelector("#data-1c-password").value,
+    passwordSecretId: document.querySelector("#data-1c-password-secret").value,
     entity: document.querySelector("#data-1c-entity").value.trim(),
     filter: document.querySelector("#data-1c-filter").value.trim()
   });
@@ -750,6 +834,7 @@ document.querySelector("#data-bitrix24-form").addEventListener("submit", (event)
   event.preventDefault();
   fetchTestData("bitrix24", "live", {
     webhookUrl: document.querySelector("#data-bitrix24-webhook").value.trim(),
+    webhookUrlSecretId: document.querySelector("#data-bitrix24-webhook-secret").value,
     entityTypeId: Number(document.querySelector("#data-bitrix24-type").value)
   });
 });
@@ -758,11 +843,17 @@ document.querySelector("#data-amocrm-form").addEventListener("submit", (event) =
   fetchTestData("amocrm", "live", {
     baseUrl: document.querySelector("#data-amocrm-url").value.trim(),
     accessToken: document.querySelector("#data-amocrm-token").value,
+    accessTokenSecretId: document.querySelector("#data-amocrm-token-secret").value,
     query: document.querySelector("#data-amocrm-query").value.trim()
   });
 });
 document.querySelector("#schedule-form").addEventListener("submit", createSchedule);
 document.querySelector("#device-form").addEventListener("submit", createDevice);
+document.querySelector("#secret-form").addEventListener("submit", createSecret);
+document.querySelector("#audit-filters").addEventListener("submit", (event) => {
+  event.preventDefault();
+  loadAudit();
+});
 elements.form.addEventListener("submit", submitRun);
 
 loadExample();
@@ -772,4 +863,6 @@ loadTemplates();
 loadSchedules();
 loadQueue();
 loadDevices();
+loadSecrets();
+loadAudit();
 setInterval(loadQueue, 2_000);

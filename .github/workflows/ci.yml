@@ -23,3 +23,4 @@ jobs:
       - run: node --check dashboard/app.js
       - run: node --check demo/server.mjs
       - run: node --check demo/appium-mock.mjs
+      - run: node --check demo/integration-mock.mjs

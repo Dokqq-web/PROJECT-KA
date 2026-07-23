@@ -99,6 +99,10 @@ export class AuthService {
     ) > 0;
   }
 
+  close(): void {
+    this.database.close();
+  }
+
   private ensureBootstrap(key: string, name: string, role: Role): void {
     const hash = hashKey(key);
     const existing = this.database
@@ -141,4 +145,3 @@ export function roleValue(value: unknown): Role | undefined {
 export function canWrite(principal: Principal): boolean {
   return principal.role === "admin" || principal.role === "editor";
 }
-

@@ -6,6 +6,22 @@
 Инструкция по защищённому запуску в Docker находится в
 `docs/DEPLOYMENT.md`.
 
+## Что уже реализовано
+
+- headless-запуск веб-тестов через Playwright;
+- Android/iOS-сценарии через внешний Appium-агент;
+- очередь, ограничение параллельности, отмена и история запусков в SQLite;
+- одноразовые и повторяющиеся расписания;
+- сохранение, копирование и запуск шаблонов тест-кейсов;
+- импорт тест-кейсов из JSON, CSV, Jira, YouTrack и Kaiten;
+- получение тестовых данных из 1С OData, Битрикс24 и amoCRM;
+- публикация результатов в Jira, YouTrack и Kaiten;
+- роли `admin`, `editor`, `viewer` и хешированные API-ключи;
+- AES-256-GCM vault для токенов, паролей и webhook URL;
+- журнал аудита с фильтрацией;
+- веб-панель управления;
+- Docker Compose и GitHub Actions.
+
 ## Цель первого MVP
 
 1. Принять тест-кейс в едином JSON-формате.
@@ -51,23 +67,47 @@ API / ручной JSON ────────┘                 │
 
 ## Локальный демонстрационный стенд
 
-Для разработки не требуется настоящий клиентский проект. Команда `npm run demo`
+Для разработки не требуется настоящий клиентский проект. Команда `pnpm demo`
 запускает стенд на `http://localhost:4173`. На нём есть успешная и неуспешная
 авторизация, асинхронная загрузка данных и стабильные `data-testid`-селекторы.
 
 В другом терминале тест запускается командами:
 
 ```text
-npm run build
-npm run run:case -- examples/login.test-case.json
+pnpm install
+pnpm build
+pnpm run:case examples/login.test-case.json
 ```
 
 Результат сохраняется в `artifacts/latest-result.json`, а при падении шага рядом
 появляется полноэкранный скриншот.
 
+## Быстрый запуск API
+
+Создайте `.env` на основе `.env.example` либо задайте переменные окружения:
+
+```text
+BOOTSTRAP_API_KEY=<длинный случайный ключ администратора>
+SECRET_MASTER_KEY=<32 случайных байта в base64>
+DATABASE_PATH=./data/qa-bot.db
+RUN_CONCURRENCY=2
+API_PORT=8080
+```
+
+Затем выполните:
+
+```text
+pnpm install
+pnpm build
+pnpm api
+```
+
+Панель будет доступна по адресу `http://localhost:8080`. API-ключ можно ввести
+в панели кнопкой «Ключ доступа». Он хранится только в `sessionStorage` браузера.
+
 ## HTTP API
 
-После сборки команда `npm run api` запускает API на `http://localhost:8080`.
+После сборки команда `pnpm api` запускает API на `http://localhost:8080`.
 По этому же адресу доступна веб-панель управления тестами.
 
 - `GET /health` — проверка доступности.
@@ -95,6 +135,50 @@ npm run run:case -- examples/login.test-case.json
 - `GET /devices` — список мобильных Appium-устройств.
 - `POST /devices` — зарегистрировать Android/iOS-устройство.
 - `POST /devices/:id/disable` — отключить устройство.
+- `GET /audit` — журнал обращений к API для администратора; поддерживает фильтры
+  `method`, `status`, `principalId`, `from`, `to` и `limit`.
+- `GET /secrets` — список метаданных зашифрованных секретов.
+- `POST /secrets` — сохранить секрет в AES-256-GCM vault.
+- `POST /secrets/:id/remove` — удалить свой секрет; администратор может удалить
+  любой секрет.
+- `GET /auth/keys` — список API-ключей без исходных значений.
+- `POST /auth/keys` — создать ключ с ролью `admin`, `editor` или `viewer`.
+- `POST /auth/keys/:id/revoke` — отозвать API-ключ.
+
+Все непубличные запросы принимают ключ в заголовке:
+
+```text
+x-api-key: <API key>
+```
+
+Роль `viewer` может только читать данные. `editor` может запускать тесты и
+управлять собственными секретами. `admin` дополнительно управляет ключами,
+видит полный список секретов и журнал аудита.
+
+## Vault и интеграции
+
+Секрет создаётся один раз через панель или `POST /secrets`. В запрос интеграции
+можно передать ID секрета вместо открытого значения:
+
+```json
+{
+  "mode": "live",
+  "baseUrl": "https://company.atlassian.net",
+  "email": "qa@example.com",
+  "tokenSecretId": "UUID-секрета",
+  "query": "project = QA"
+}
+```
+
+Поддерживаемые ссылки на vault:
+
+- `tokenSecretId` — Jira, YouTrack, Kaiten и публикация результатов;
+- `passwordSecretId` — 1С;
+- `webhookUrlSecretId` — Битрикс24;
+- `accessTokenSecretId` — amoCRM.
+
+Значения не возвращаются из API, не записываются в аудит и доступны только
+владельцу секрета либо администратору.
 
 Примеры форматов находятся в `examples/test-cases-import.csv` и
 `examples/test-cases-import.json`. Для CSV одна строка соответствует одному
@@ -132,3 +216,17 @@ Jira Cloud использует email и API token для Basic authentication. 
 Запуски постоянно хранятся в SQLite-файле `data/qa-bot.db`. Путь можно изменить
 переменной окружения `DATABASE_PATH`. Если сервис перезапустился во время теста,
 незавершённый запуск помечается завершённым с объяснением причины.
+
+## Проверка проекта
+
+```text
+pnpm check
+pnpm build
+pnpm test
+node --check dashboard/app.js
+```
+
+Набор тестов проверяет загрузку собранных модулей, хеширование API-ключей,
+шифрование и владение секретами, фильтры аудита и разграничение ролей через
+реально запущенный локальный HTTP API. Те же проверки выполняются в GitHub
+Actions при `push` и создании pull request.

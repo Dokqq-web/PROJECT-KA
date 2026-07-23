@@ -22,9 +22,11 @@ import { ScheduleService } from "../services/schedule-service.js";
 import {
   AuthService,
   canWrite,
-  roleValue
+  roleValue,
+  type Principal
 } from "../security/auth-service.js";
 import { SecretVault } from "../security/secret-vault.js";
+import { AuditService } from "../security/audit-service.js";
 import { SqliteDeviceRepository } from "../repositories/sqlite-device-repository.js";
 import { DeviceService } from "../services/device-service.js";
 import { MobileRunner } from "../runners/mobile-runner.js";
@@ -58,6 +60,7 @@ const bitrix24Data = new Bitrix24DataConnector();
 const amoCrmData = new AmoCrmDataConnector();
 const auth = new AuthService(databasePath);
 const vault = new SecretVault(databasePath);
+const audit = new AuditService(databasePath);
 const resultPublisher = new ResultPublisher();
 const dashboardDirectory = fileURLToPath(new URL("../../dashboard/", import.meta.url));
 const allowedActions = new Set<TestStepAction>([
@@ -88,6 +91,17 @@ createServer(async (request, response) => {
       request.method === "GET" &&
       ["/", "/app.js", "/styles.css", "/health"].includes(url.pathname);
     const principal = auth.authenticate(extractApiKey(request));
+    if (!isPublic) {
+      response.once("finish", () => {
+        audit.record({
+          principal,
+          method: request.method ?? "UNKNOWN",
+          path: url.pathname,
+          statusCode: response.statusCode,
+          remoteAddress: request.socket.remoteAddress
+        });
+      });
+    }
     if (!isPublic && !principal) {
       sendJson(response, 401, { error: "Authentication required" });
       return;
@@ -113,7 +127,7 @@ createServer(async (request, response) => {
         mode: body.mode,
         baseUrl: stringValue(body.baseUrl),
         email: stringValue(body.email),
-        token: stringValue(body.token),
+        token: secretOrValue(body, "token", principal!),
         query: stringValue(body.query)
       });
       sendConnectorResult(response, result);
@@ -126,7 +140,7 @@ createServer(async (request, response) => {
         mode: body.mode,
         baseUrl: stringValue(body.baseUrl),
         username: stringValue(body.username),
-        password: stringValue(body.password),
+        password: secretOrValue(body, "password", principal!),
         entity: stringValue(body.entity),
         filter: stringValue(body.filter)
       }));
@@ -137,7 +151,7 @@ createServer(async (request, response) => {
       const body = await readConnectorBody(request);
       sendJson(response, 200, await bitrix24Data.fetch({
         mode: body.mode,
-        webhookUrl: stringValue(body.webhookUrl),
+        webhookUrl: secretOrValue(body, "webhookUrl", principal!),
         entityTypeId:
           typeof body.entityTypeId === "number" ? body.entityTypeId : undefined
       }));
@@ -149,7 +163,7 @@ createServer(async (request, response) => {
       sendJson(response, 200, await amoCrmData.fetch({
         mode: body.mode,
         baseUrl: stringValue(body.baseUrl),
-        accessToken: stringValue(body.accessToken),
+        accessToken: secretOrValue(body, "accessToken", principal!),
         query: stringValue(body.query)
       }));
       return;
@@ -163,7 +177,7 @@ createServer(async (request, response) => {
       const result = await kaiten.import({
         mode: body.mode,
         baseUrl: stringValue(body.baseUrl),
-        token: stringValue(body.token),
+        token: secretOrValue(body, "token", principal!),
         query: stringValue(body.query)
       });
       sendConnectorResult(response, result);
@@ -187,6 +201,26 @@ createServer(async (request, response) => {
 
     if (request.method === "GET" && url.pathname === "/me") {
       sendJson(response, 200, principal);
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/audit") {
+      if (principal?.role !== "admin") {
+        sendJson(response, 403, { error: "Admin role required" });
+        return;
+      }
+      sendJson(
+        response,
+        200,
+        audit.list({
+          limit: numberParameter(url, "limit"),
+          method: url.searchParams.get("method") ?? undefined,
+          statusCode: numberParameter(url, "status"),
+          principalId: url.searchParams.get("principalId") ?? undefined,
+          from: dateParameter(url, "from"),
+          to: dateParameter(url, "to")
+        })
+      );
       return;
     }
 
@@ -296,10 +330,15 @@ createServer(async (request, response) => {
 
     const removeSecretMatch = url.pathname.match(/^\/secrets\/([a-f0-9-]+)\/remove$/i);
     if (request.method === "POST" && removeSecretMatch) {
+      const removed = vault.remove(
+        removeSecretMatch[1]!,
+        principal!.id,
+        principal!.role === "admin"
+      );
       sendJson(
         response,
-        vault.remove(removeSecretMatch[1]!) ? 200 : 404,
-        { removed: true }
+        removed ? 200 : 404,
+        { removed }
       );
       return;
     }
@@ -378,7 +417,7 @@ createServer(async (request, response) => {
       const result = await youTrack.import({
         mode: body.mode,
         baseUrl: typeof body.baseUrl === "string" ? body.baseUrl : undefined,
-        token: typeof body.token === "string" ? body.token : undefined,
+        token: secretOrValue(body, "token", principal!),
         query: typeof body.query === "string" ? body.query : undefined
       });
       const imported = result.testCases.map((testCase) =>
@@ -492,7 +531,7 @@ createServer(async (request, response) => {
           {
             mode: body.mode,
             baseUrl: stringValue(body.baseUrl),
-            token: stringValue(body.token),
+            token: secretOrValue(body, "token", principal!),
             email: stringValue(body.email)
           }
         )
@@ -649,6 +688,26 @@ function stringValue(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
+function secretOrValue(
+  body: Record<string, unknown>,
+  key: string,
+  principal: Principal
+): string | undefined {
+  const secretId = body[`${key}SecretId`];
+  if (typeof secretId === "string" && secretId) {
+    const value = vault.read(
+      secretId,
+      principal.id,
+      principal.role === "admin"
+    );
+    if (value === undefined) {
+      throw new Error(`Секрет для поля ${key} не найден или недоступен`);
+    }
+    return value;
+  }
+  return stringValue(body[key]);
+}
+
 function sendConnectorResult(
   response: ServerResponse,
   result: {
@@ -664,6 +723,26 @@ function sendConnectorResult(
     imported,
     errors: result.errors
   });
+}
+
+function numberParameter(url: URL, name: string): number | undefined {
+  const value = url.searchParams.get(name);
+  if (value === null || value === "") return undefined;
+  const number = Number(value);
+  if (!Number.isFinite(number)) {
+    throw new Error(`Query parameter ${name} must be a number`);
+  }
+  return number;
+}
+
+function dateParameter(url: URL, name: string): string | undefined {
+  const value = url.searchParams.get(name);
+  if (!value) return undefined;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    throw new Error(`Query parameter ${name} must be an ISO date`);
+  }
+  return date.toISOString();
 }
 
 async function sendFile(

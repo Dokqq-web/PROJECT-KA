@@ -166,6 +166,7 @@
               Permanent token
               <input id="youtrack-token" type="password" autocomplete="off" placeholder="perm:…">
             </label>
+            <label>Сохранённый token<select id="youtrack-token-secret" data-secret-select><option value="">Не использовать</option></select></label>
             <label>
               Поисковый запрос
               <input id="youtrack-query" placeholder="project: QA tag: autotest">
@@ -194,6 +195,7 @@ assertVisible | [data-testid=dashboard]
           <label>Адрес Jira<input id="jira-url" type="url" placeholder="https://company.atlassian.net"></label>
           <label>Email<input id="jira-email" type="email" placeholder="qa@company.ru"></label>
           <label>API token<input id="jira-token" type="password" autocomplete="off" placeholder="Токен Atlassian"></label>
+          <label>Сохранённый token<select id="jira-token-secret" data-secret-select><option value="">Не использовать</option></select></label>
           <label>JQL<input id="jira-query" placeholder="project = QA AND labels = autotest"></label>
           <button class="secondary connector-submit" type="submit">Подключить Jira и импортировать</button>
         </form>
@@ -207,6 +209,7 @@ assertVisible | [data-testid=dashboard]
         <form class="connector-form connector-wide kaiten-form" id="kaiten-form">
           <label>Адрес Kaiten<input id="kaiten-url" type="url" placeholder="https://company.kaiten.ru"></label>
           <label>Bearer token<input id="kaiten-token" type="password" autocomplete="off" placeholder="Токен Kaiten"></label>
+          <label>Сохранённый token<select id="kaiten-token-secret" data-secret-select><option value="">Не использовать</option></select></label>
           <label>Поиск по карточкам<input id="kaiten-query" placeholder="autotest"></label>
           <button class="secondary connector-submit" type="submit">Подключить Kaiten и импортировать</button>
         </form>
@@ -229,6 +232,7 @@ assertVisible | [data-testid=dashboard]
               <input id="data-1c-url" type="url" placeholder="OData URL">
               <input id="data-1c-user" placeholder="Пользователь">
               <input id="data-1c-password" type="password" placeholder="Пароль">
+              <select id="data-1c-password-secret" data-secret-select><option value="">Сохранённый пароль</option></select>
               <input id="data-1c-entity" placeholder="Catalog_Номенклатура">
               <input id="data-1c-filter" placeholder="$filter (необязательно)">
               <button class="secondary" type="submit">Получить данные</button>
@@ -239,6 +243,7 @@ assertVisible | [data-testid=dashboard]
             <div class="data-card-title"><strong>Битрикс24</strong><button type="button" data-demo="bitrix24">Демо</button></div>
             <form id="data-bitrix24-form">
               <input id="data-bitrix24-webhook" type="url" placeholder="URL входящего вебхука">
+              <select id="data-bitrix24-webhook-secret" data-secret-select><option value="">Сохранённый webhook</option></select>
               <input id="data-bitrix24-type" type="number" value="3" placeholder="entityTypeId">
               <button class="secondary" type="submit">Получить данные</button>
             </form>
@@ -249,6 +254,7 @@ assertVisible | [data-testid=dashboard]
             <form id="data-amocrm-form">
               <input id="data-amocrm-url" type="url" placeholder="https://company.amocrm.ru">
               <input id="data-amocrm-token" type="password" placeholder="OAuth access token">
+              <select id="data-amocrm-token-secret" data-secret-select><option value="">Сохранённый token</option></select>
               <input id="data-amocrm-query" placeholder="Поиск контакта">
               <button class="secondary" type="submit">Получить данные</button>
             </form>
@@ -256,6 +262,38 @@ assertVisible | [data-testid=dashboard]
           </article>
         </div>
         <div class="import-report" id="data-report" role="status" hidden></div>
+      </section>
+
+      <section class="security-section history-section">
+        <div class="section-title">
+          <div><p class="section-number">09</p><h2>Безопасность и аудит</h2></div>
+          <span class="connector-badge">Admin</span>
+        </div>
+        <div class="security-grid">
+          <form class="secret-form" id="secret-form">
+            <h3>Новый секрет</h3>
+            <label>Название<input id="secret-name" placeholder="Jira API token"></label>
+            <label>Значение<input id="secret-value" type="password" autocomplete="off"></label>
+            <button class="secondary" type="submit">Сохранить в vault</button>
+            <div class="secret-list" id="secret-list"></div>
+          </form>
+          <div class="audit-panel">
+            <h3>Последние события</h3>
+            <form class="audit-filters" id="audit-filters">
+              <label>Метод
+                <select id="audit-method">
+                  <option value="">Все</option>
+                  <option>GET</option><option>POST</option><option>PUT</option>
+                </select>
+              </label>
+              <label>Статус
+                <input id="audit-status" type="number" min="100" max="599" placeholder="Все">
+              </label>
+              <button class="secondary" type="submit">Применить</button>
+            </form>
+            <div class="audit-list" id="audit-list"><p class="history-empty">Событий пока нет.</p></div>
+          </div>
+        </div>
       </section>
 
       <section class="device-section history-section">
